@@ -27,7 +27,14 @@ SYSTEM_VOICE_RATE = 180
 # because holding Option changes which letter macOS reports.
 HOTKEY_KEY_CODE = 46
 HOTKEY_LABEL = "⌘⌥⇧M"
-DOUBLE_TAP_LABEL = "Right Option twice"
+HOTKEY_SPOKEN = "Command Option Shift M"
+
+# Keys you can double-tap to start Murmur. Pick one in the "Double-tap key" menu.
+DOUBLE_TAP_KEYS = {
+    "right_command": "Right Command",
+    "right_option": "Right Option",
+    "right_shift": "Right Shift",
+}
 DOUBLE_TAP_SECONDS = 0.4
 
 

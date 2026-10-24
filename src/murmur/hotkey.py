@@ -2,7 +2,7 @@
 
 There are two ways in:
 - ⌘⌥⇧M (Command + Option + Shift + M)
-- tapping the right Option key twice, quickly
+- tapping one right-hand modifier key twice, quickly (Right Command by default)
 """
 
 import ctypes
@@ -12,7 +12,31 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from murmur import config
+from murmur import config, settings
+
+
+# Which pynput key each "Double-tap key" menu choice means.
+_TAP_KEY_NAMES = {
+    "right_command": "cmd_r",
+    "right_option": "alt_r",
+    "right_shift": "shift_r",
+}
+
+
+def double_tap_choice() -> str:
+    """The saved double-tap key, or the default if the saved one is unknown."""
+    choice = settings.get("double_tap_key")
+    return choice if choice in config.DOUBLE_TAP_KEYS else settings.DEFAULTS["double_tap_key"]
+
+
+def double_tap_label() -> str:
+    """Human words for the current double tap, like "Right Command twice"."""
+    return f"{config.DOUBLE_TAP_KEYS[double_tap_choice()]} twice"
+
+
+def shortcuts_label() -> str:
+    """Both shortcuts in one short phrase for menus and messages."""
+    return f"{config.HOTKEY_LABEL} or {double_tap_label()}"
 
 
 def _load_keyboard():
@@ -35,8 +59,11 @@ class ShortcutWatcher:
         on_activate: Callable[[], None],
         clock: Callable[[], float] = time.monotonic,
         on_first_event: Callable[[], None] | None = None,
+        tap_choice: Callable[[], str] = double_tap_choice,
     ) -> None:
         self._on_activate = on_activate
+        self._keyboard = keyboard
+        self._tap_choice = tap_choice
         self._clock = clock
         self._on_first_event = on_first_event
         # Left and right versions of a modifier count as the same thing.
@@ -50,22 +77,25 @@ class ShortcutWatcher:
             keyboard.Key.ctrl: "ctrl",
             keyboard.Key.ctrl_r: "ctrl",
         }
-        self._right_option = keyboard.Key.alt_r
         self._held: set[str] = set()
-        # Double-tap memory: when the last clean tap of right Option ended.
-        self._right_option_down_alone = False
+        # Double-tap memory: is the tap key down on its own, and when did the last clean tap end?
+        self._tap_down_alone = False
         self._last_tap_end: float | None = None
+
+    def _tap_key(self) -> Any:
+        # Asked fresh every time, so a new menu choice works straight away.
+        return getattr(self._keyboard.Key, _TAP_KEY_NAMES[self._tap_choice()])
 
     def press(self, key: Any) -> None:
         if self._on_first_event is not None:
             self._on_first_event()
             self._on_first_event = None
 
-        if key == self._right_option:
-            self._right_option_down_alone = True
+        if key == self._tap_key():
+            self._tap_down_alone = True
         else:
             # Any other key in between means it is not a double tap.
-            self._right_option_down_alone = False
+            self._tap_down_alone = False
             self._last_tap_end = None
 
         name = self._modifier_names.get(key)
@@ -81,9 +111,9 @@ class ShortcutWatcher:
         if name:
             self._held.discard(name)
 
-        if key != self._right_option or not self._right_option_down_alone:
+        if key != self._tap_key() or not self._tap_down_alone:
             return
-        self._right_option_down_alone = False
+        self._tap_down_alone = False
 
         now = self._clock()
         if self._last_tap_end is not None and now - self._last_tap_end <= config.DOUBLE_TAP_SECONDS:

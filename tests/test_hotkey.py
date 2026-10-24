@@ -70,12 +70,12 @@ def test_m_without_all_three_modifiers_does_nothing() -> None:
     assert fired == []
 
 
-def test_double_tap_right_option_fires() -> None:
+def test_double_tap_right_command_fires_by_default() -> None:
     watcher, fired, clock = make_watcher()
 
-    tap(watcher, FakeKey.alt_r, clock)
+    tap(watcher, FakeKey.cmd_r, clock)
     clock.now += 0.2
-    tap(watcher, FakeKey.alt_r, clock)
+    tap(watcher, FakeKey.cmd_r, clock)
 
     assert fired == [1]
 
@@ -83,9 +83,9 @@ def test_double_tap_right_option_fires() -> None:
 def test_slow_double_tap_does_not_fire() -> None:
     watcher, fired, clock = make_watcher()
 
-    tap(watcher, FakeKey.alt_r, clock)
+    tap(watcher, FakeKey.cmd_r, clock)
     clock.now += 0.6
-    tap(watcher, FakeKey.alt_r, clock)
+    tap(watcher, FakeKey.cmd_r, clock)
 
     assert fired == []
 
@@ -93,29 +93,29 @@ def test_slow_double_tap_does_not_fire() -> None:
 def test_another_key_between_taps_cancels_the_double_tap() -> None:
     watcher, fired, clock = make_watcher()
 
-    tap(watcher, FakeKey.alt_r, clock)
+    tap(watcher, FakeKey.cmd_r, clock)
     tap(watcher, letter("a", 0), clock)
-    tap(watcher, FakeKey.alt_r, clock)
+    tap(watcher, FakeKey.cmd_r, clock)
 
     assert fired == []
 
 
-def test_holding_right_option_to_type_a_character_is_not_a_tap() -> None:
+def test_holding_the_tap_key_for_a_shortcut_is_not_a_tap() -> None:
     watcher, fired, clock = make_watcher()
 
-    tap(watcher, FakeKey.alt_r, clock)
-    watcher.press(FakeKey.alt_r)
+    tap(watcher, FakeKey.cmd_r, clock)
+    watcher.press(FakeKey.cmd_r)
     tap(watcher, letter("é", 14), clock)
-    watcher.release(FakeKey.alt_r)
+    watcher.release(FakeKey.cmd_r)
 
     assert fired == []
 
 
-def test_left_option_double_tap_does_not_fire() -> None:
+def test_left_command_double_tap_does_not_fire() -> None:
     watcher, fired, clock = make_watcher()
 
-    tap(watcher, FakeKey.alt, clock)
-    tap(watcher, FakeKey.alt, clock)
+    tap(watcher, FakeKey.cmd, clock)
+    tap(watcher, FakeKey.cmd, clock)
 
     assert fired == []
 
@@ -124,10 +124,33 @@ def test_three_quick_taps_fire_only_once() -> None:
     watcher, fired, clock = make_watcher()
 
     for _ in range(3):
-        tap(watcher, FakeKey.alt_r, clock)
+        tap(watcher, FakeKey.cmd_r, clock)
         clock.now += 0.1
 
     assert fired == [1]
+
+
+def test_the_menu_choice_changes_the_tap_key_straight_away() -> None:
+    watcher, fired, clock = make_watcher()
+
+    hotkey.settings.set("double_tap_key", "right_shift")
+    tap(watcher, FakeKey.cmd_r, clock)
+    tap(watcher, FakeKey.cmd_r, clock)
+    assert fired == []
+
+    tap(watcher, FakeKey.shift_r, clock)
+    tap(watcher, FakeKey.shift_r, clock)
+    assert fired == [1]
+
+
+def test_labels_follow_the_saved_choice() -> None:
+    assert hotkey.shortcuts_label() == "⌘⌥⇧M or Right Command twice"
+
+    hotkey.settings.set("double_tap_key", "right_option")
+    assert hotkey.double_tap_label() == "Right Option twice"
+
+    hotkey.settings.set("double_tap_key", "something_else")
+    assert hotkey.double_tap_label() == "Right Command twice"
 
 
 def test_first_key_event_is_reported_once() -> None:

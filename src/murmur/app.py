@@ -7,6 +7,7 @@ from collections.abc import Callable
 from murmur import config, voice
 from murmur.cleaner import clean
 from murmur.decision import Action, contains_error, decide, speech_failure_summary
+from murmur import hotkey, settings
 from murmur.hotkey import start_hotkey_listener
 from murmur import personality
 from murmur.summariser import summarise
@@ -18,9 +19,11 @@ _JOB_LOCK = threading.Lock()
 _JOB_ACTIVE = False
 _JOB_CANCELLED = threading.Event()
 _HOTKEY_LISTENER = None
-READ_LAST_OUTPUT_MENU_TITLE = (
-    f"Read last output ({config.HOTKEY_LABEL} or {config.DOUBLE_TAP_LABEL})"
-)
+
+
+def read_last_output_title() -> str:
+    """Menu label that always shows the shortcuts that work right now."""
+    return f"Read last output ({hotkey.shortcuts_label()})"
 
 
 def print_last_output() -> None:
@@ -165,14 +168,14 @@ def start_hotkey() -> bool:
             lambda: start_announcement(stop_if_running=True)
         )
         print(
-            f"Murmur hotkey: {config.HOTKEY_LABEL} or {config.DOUBLE_TAP_LABEL} starts "
-            "announcements; press either again to stop speech."
+            f"Murmur hotkey: {hotkey.shortcuts_label()} starts announcements; "
+            "press either again to stop speech."
         )
         return True
     except Exception as error:
         print(
             f"Murmur startup warning: hotkeys {config.HOTKEY_LABEL} and "
-            f"{config.DOUBLE_TAP_LABEL} are unavailable. {error}",
+            f"{hotkey.double_tap_label()} are unavailable. {error}",
             file=sys.stderr,
         )
         return False
@@ -188,7 +191,36 @@ class MurmurApp(rumps.App):
         smooth.state = 1
         personality_menu = rumps.MenuItem("Personality")
         personality_menu.update([smooth, focused])
-        self.menu.update([personality_menu])
+
+        # Keep a handle on this item so its label can follow the double-tap choice.
+        self.read_item = rumps.MenuItem(read_last_output_title(), callback=self.read_last_output)
+
+        self.tap_items = {}
+        tap_menu = rumps.MenuItem("Double-tap key")
+        for choice, name in config.DOUBLE_TAP_KEYS.items():
+            item = rumps.MenuItem(name, callback=self._tap_chooser(choice))
+            self.tap_items[choice] = item
+            tap_menu.add(item)
+
+        self.menu.update([self.read_item, personality_menu, tap_menu])
+        self._show_tap_choice()
+
+    def _tap_chooser(self, choice: str) -> Callable[[object], None]:
+        def choose(_sender: object) -> None:
+            self.choose_double_tap(choice)
+
+        return choose
+
+    def choose_double_tap(self, choice: str) -> None:
+        settings.set("double_tap_key", choice)
+        self._show_tap_choice()
+        print(f"Murmur hotkey: now {hotkey.shortcuts_label()}.")
+
+    def _show_tap_choice(self) -> None:
+        current = hotkey.double_tap_choice()
+        for choice, item in self.tap_items.items():
+            item.state = int(choice == current)
+        self.read_item.title = read_last_output_title()
 
     def _choose_personality(self, mode: personality.Mode) -> None:
         personality.set_mode(mode)
@@ -201,7 +233,6 @@ class MurmurApp(rumps.App):
     def choose_focused(self, _sender: object) -> None:
         self._choose_personality(personality.Mode.FOCUSED)
 
-    @rumps.clicked(READ_LAST_OUTPUT_MENU_TITLE)
     def read_last_output(self, _sender: object) -> None:
         start_announcement()
 
