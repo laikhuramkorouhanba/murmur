@@ -116,7 +116,7 @@ def start_hotkey() -> None:
         _HOTKEY_LISTENER = start_hotkey_listener(
             lambda: start_announcement(stop_if_running=True)
         )
-    except (ImportError, RuntimeError) as error:
+    except Exception as error:
         print(f"Murmur startup warning: {error}", file=sys.stderr)
 
 

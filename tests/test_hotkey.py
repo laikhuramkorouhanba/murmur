@@ -51,8 +51,8 @@ def install_fake_keyboard(monkeypatch, *, trusted=True):
 
     monkeypatch.setattr(
         hotkey,
-        "keyboard",
-        SimpleNamespace(HotKey=FakeHotKey, Listener=listener_factory),
+        "_load_keyboard",
+        lambda: SimpleNamespace(HotKey=FakeHotKey, Listener=listener_factory),
     )
     return listeners
 

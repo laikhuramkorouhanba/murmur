@@ -3,13 +3,18 @@
 from collections.abc import Callable
 from typing import Any
 
-from pynput import keyboard
-
 from murmur import config
+
+
+def _load_keyboard():
+    from pynput import keyboard
+
+    return keyboard
 
 
 def start_hotkey_listener(on_activate: Callable[[], None]) -> Any:
     """Start the configured shortcut or explain which macOS permission is missing."""
+    keyboard = _load_keyboard()
     hotkey = keyboard.HotKey(keyboard.HotKey.parse(config.HOTKEY), on_activate)
     listener = keyboard.Listener(on_press=hotkey.press, on_release=hotkey.release)
     listener.start()
