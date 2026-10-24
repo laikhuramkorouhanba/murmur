@@ -26,7 +26,11 @@ def test_announcement_prints_cleaned_output_and_plays_success_cue(monkeypatch, c
     history = "user@MacBook-Pro murmur % pytest -q\n. [100%]\n1 passed in 0.01s\nuser@MacBook-Pro murmur % "
     cues = []
     monkeypatch.setattr(app, "get_terminal_text", lambda: history)
-    monkeypatch.setattr(app.voice, "play_soft_sound", lambda: cues.append(True))
+    monkeypatch.setattr(
+        app.voice,
+        "play_soft_sound",
+        lambda: (cues.append(True) or "sounddevice"),
+    )
 
     app.announce_last_output()
 
@@ -37,6 +41,7 @@ def test_announcement_prints_cleaned_output_and_plays_success_cue(monkeypatch, c
         "1 passed in 0.01s\n"
         "----- Murmur: spoken text -----\n"
         "(none; playing the soft success sound)\n"
+        "Voice engine: sounddevice\n"
         "----- End of Murmur announcement -----\n"
     )
 
@@ -45,12 +50,18 @@ def test_announcement_speaks_short_output_exactly(monkeypatch, capsys) -> None:
     history = "user@MacBook-Pro murmur % pwd\n/Users/laikhuram/murmur\nuser@MacBook-Pro murmur % "
     spoken = []
     monkeypatch.setattr(app, "get_terminal_text", lambda: history)
-    monkeypatch.setattr(app.voice, "speak", spoken.append)
+    monkeypatch.setattr(
+        app.voice,
+        "speak",
+        lambda text, **_kwargs: (spoken.append(text) or "OpenAI"),
+    )
 
     app.announce_last_output()
 
     assert spoken == ["/Users/laikhuram/murmur"]
-    assert "/Users/laikhuram/murmur\n----- Murmur: spoken text -----" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "/Users/laikhuram/murmur\n----- Murmur: spoken text -----" in output
+    assert "Voice engine: OpenAI" in output
 
 
 def test_announcement_summarises_errors_and_speaks_the_summary(monkeypatch, capsys) -> None:
@@ -65,7 +76,11 @@ def test_announcement_summarises_errors_and_speaks_the_summary(monkeypatch, caps
     spoken = []
     monkeypatch.setattr(app, "get_terminal_text", lambda: history)
     monkeypatch.setattr(app, "summarise", lambda text: (summaries.append(text) or "The test failed."))
-    monkeypatch.setattr(app.voice, "speak", spoken.append)
+    monkeypatch.setattr(
+        app.voice,
+        "speak",
+        lambda text, **_kwargs: (spoken.append(text) or "OpenAI"),
+    )
 
     app.announce_last_output()
 
@@ -83,6 +98,7 @@ def test_announcement_summarises_errors_and_speaks_the_summary(monkeypatch, caps
     assert spoken[0] in output
     assert "demo/failing_check.py:6: AssertionError" in output
     assert "demo/failing_check.py:6: AssertionError" not in spoken[0]
+    assert "Voice engine: OpenAI" in output
 
 
 def test_cancellation_during_summary_prevents_speech(monkeypatch, capsys) -> None:

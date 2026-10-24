@@ -45,6 +45,7 @@ def announce_last_output(
         cleaned = clean(last_command_output(reader()))
     except RuntimeError as error:
         print(error)
+        print("Voice engine: none (no speech)")
         print("----- End of Murmur announcement -----")
         return
 
@@ -52,6 +53,7 @@ def announce_last_output(
     failed = contains_error(cleaned)
     personality.record_result(failed)
     if cancelled.is_set():
+        print("Voice engine: none (stopped)")
         print("----- End of Murmur announcement -----")
         return
 
@@ -59,9 +61,9 @@ def announce_last_output(
     if action is Action.SOFT_SOUND:
         print("----- Murmur: spoken text -----")
         print("(none; playing the soft success sound)")
+        engine = voice.play_soft_sound() if not cancelled.is_set() else "none (stopped)"
+        print(f"Voice engine: {engine}")
         print("----- End of Murmur announcement -----")
-        if not cancelled.is_set():
-            voice.play_soft_sound()
         return
 
     if action is Action.SPEAK_EXACTLY:
@@ -72,13 +74,15 @@ def announce_last_output(
             summary = speech_failure_summary(cleaned, summary)
         spoken_text = personality.style_summary(summary, failed=failed)
     if cancelled.is_set():
+        print("Voice engine: none (stopped)")
         print("----- End of Murmur announcement -----")
         return
 
     print("----- Murmur: spoken text -----")
     print(spoken_text)
+    engine = voice.speak(spoken_text, mode=personality.get_mode())
+    print(f"Voice engine: {engine}")
     print("----- End of Murmur announcement -----")
-    voice.speak(spoken_text)
 
 
 def _run_announcement_job() -> None:

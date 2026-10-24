@@ -1,4 +1,5 @@
 from murmur import config, voice
+from murmur import personality
 
 
 class FakeOutputStream:
@@ -81,7 +82,7 @@ def test_soft_sound_writes_a_quiet_offline_tone(monkeypatch) -> None:
 
     monkeypatch.setattr(voice.sounddevice, "RawOutputStream", make_stream)
 
-    voice.play_soft_sound()
+    assert voice.play_soft_sound() == "sounddevice"
 
     assert len(streams) == 1
     assert streams[0].arguments == {
@@ -109,12 +110,12 @@ def test_missing_key_uses_the_macos_say_command(monkeypatch) -> None:
 
     monkeypatch.setattr(voice.subprocess, "Popen", fake_popen)
 
-    voice.speak("The tests passed.")
+    assert voice.speak("The tests passed.") == "macOS say"
 
     assert commands == [["say", "-r", "230", "The tests passed."]]
 
 
-def test_streams_openai_audio_using_cedar_and_configured_speed(monkeypatch) -> None:
+def test_streams_openai_audio_using_marin_and_configured_speed(monkeypatch) -> None:
     voice.reset_stop()
     monkeypatch.setattr(config, "OPENAI_API_KEY", "test-key")
     output_streams: list[FakeOutputStream] = []
@@ -129,11 +130,12 @@ def test_streams_openai_audio_using_cedar_and_configured_speed(monkeypatch) -> N
     speech_create = FakeSpeechCreate(fake_response)
     client = FakeClient(speech_create)
 
-    voice.speak("A short result.", client=client)
+    assert voice.speak("A short result.", client=client) == "OpenAI"
 
     assert speech_create.arguments["model"] == "gpt-4o-mini-tts"
-    assert speech_create.arguments["voice"] == "cedar"
-    assert speech_create.arguments["speed"] == 1.15
+    assert speech_create.arguments["voice"] == "marin"
+    assert speech_create.arguments["speed"] == 1.0
+    assert "late-night radio host" in speech_create.arguments["instructions"]
     assert speech_create.arguments["response_format"] == "pcm"
     assert speech_create.arguments["timeout"] == 5
     assert output_streams[0].chunks == [b"\x00\x00\x01\x00"]
@@ -157,7 +159,7 @@ def test_network_error_falls_back_to_macos_say(monkeypatch) -> None:
     )
     client = FakeClient(FakeSpeechCreate(error=OSError("offline")))
 
-    voice.speak("Exact fallback text.", client=client)
+    assert voice.speak("Exact fallback text.", client=client) == "macOS say"
 
     assert commands == [["say", "-r", "230", "Exact fallback text."]]
 
@@ -179,7 +181,7 @@ def test_no_audio_falls_back_to_macos_say(monkeypatch) -> None:
     )
     client = FakeClient(FakeSpeechCreate(FakeStreamingResponse([])))
 
-    voice.speak("No audio arrived.", client=client)
+    assert voice.speak("No audio arrived.", client=client) == "macOS say"
 
     assert commands == [["say", "-r", "230", "No audio arrived."]]
 
@@ -202,7 +204,7 @@ def test_audio_late_past_five_seconds_falls_back_to_macos_say(monkeypatch) -> No
     )
     client = FakeClient(FakeSpeechCreate(FakeStreamingResponse([b"\x00\x00"])))
 
-    voice.speak("Late audio.", client=client)
+    assert voice.speak("Late audio.", client=client) == "macOS say"
 
     assert commands == [["say", "-r", "230", "Late audio."]]
 
@@ -227,9 +229,24 @@ def test_audio_device_failure_falls_back_to_macos_say(monkeypatch) -> None:
     )
     client = FakeClient(FakeSpeechCreate(FakeStreamingResponse([b"\x00\x00"])))
 
-    voice.speak("Use the Mac voice.", client=client)
+    assert voice.speak("Use the Mac voice.", client=client) == "macOS say"
 
     assert commands == [["say", "-r", "230", "Use the Mac voice."]]
+
+
+def test_focused_mode_uses_neutral_tts_instructions(monkeypatch) -> None:
+    voice.reset_stop()
+    personality.set_mode(personality.Mode.FOCUSED)
+    monkeypatch.setattr(config, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(voice.sounddevice, "RawOutputStream", lambda **kwargs: FakeOutputStream(**kwargs))
+    speech_create = FakeSpeechCreate(FakeStreamingResponse([b"\x00\x00"]))
+    client = FakeClient(speech_create)
+
+    voice.speak("A short result.", client=client)
+
+    assert "Clear, calm, neutral" in speech_create.arguments["instructions"]
+    assert "late-night radio host" not in speech_create.arguments["instructions"]
+    personality.set_mode(personality.Mode.SMOOTH)
 
 
 def test_stop_speech_terminates_current_playback(monkeypatch) -> None:

@@ -10,6 +10,7 @@ from typing import Any
 import sounddevice
 
 from murmur import config
+from murmur import personality
 
 
 _SAMPLE_RATE = 22050
@@ -83,10 +84,10 @@ def _tone_bytes() -> bytes:
     return bytes(samples)
 
 
-def play_soft_sound() -> None:
+def play_soft_sound() -> str:
     """Play a quiet confirmation tone, using speech if audio playback fails."""
     if _STOP_EVENT.is_set():
-        return
+        return "none (stopped)"
     stream = None
     try:
         stream = sounddevice.RawOutputStream(
@@ -99,9 +100,11 @@ def play_soft_sound() -> None:
         stream.start()
         stream.write(_tone_bytes())
         stream.stop()
+        return "sounddevice"
     except Exception:
         if not _STOP_EVENT.is_set():
-            _speak_with_system_voice("Command succeeded.")
+            return "macOS say" if _speak_with_system_voice("Command succeeded.") else "none"
+        return "none (stopped)"
     finally:
         _set_active_stream(None)
         if stream is not None:
@@ -111,10 +114,10 @@ def play_soft_sound() -> None:
                 pass
 
 
-def _speak_with_system_voice(text: str) -> None:
+def _speak_with_system_voice(text: str) -> bool:
     """Use the built-in Mac voice so speech still works without the network."""
     if not text or _STOP_EVENT.is_set():
-        return
+        return False
     process: subprocess.Popen[bytes] | None = None
     try:
         process = subprocess.Popen(
@@ -123,15 +126,19 @@ def _speak_with_system_voice(text: str) -> None:
             stderr=subprocess.DEVNULL,
         )
         _set_active_process(process)
-        process.wait()
+        return process.wait() == 0
     except (FileNotFoundError, OSError):
-        return
+        return False
     finally:
         if process is not None:
             _set_active_process(None)
 
 
-def _stream_openai_speech(text: str, client: Any) -> bool:
+def _stream_openai_speech(
+    text: str,
+    client: Any,
+    mode: personality.Mode | str | None = None,
+) -> bool:
     """Play raw PCM chunks as soon as the OpenAI response sends them."""
     requested_at = time.monotonic()
     output = None
@@ -140,10 +147,7 @@ def _stream_openai_speech(text: str, client: Any) -> bool:
         model=config.TTS_MODEL,
         voice=config.VOICE,
         input=text,
-        instructions=(
-            "Calm, steady, friendly colleague. Brisk pace. Read file names, paths, "
-            "line numbers and error text clearly and exactly. No dramatic emphasis."
-        ),
+        instructions=personality.tts_instructions(mode),
         speed=config.SPEECH_SPEED,
         response_format="pcm",
         timeout=config.FIRST_AUDIO_TIMEOUT_SECONDS,
@@ -181,13 +185,17 @@ def _stream_openai_speech(text: str, client: Any) -> bool:
                 output.close()
 
 
-def speak(text: str, client: Any | None = None) -> None:
+def speak(
+    text: str,
+    client: Any | None = None,
+    *,
+    mode: personality.Mode | str | None = None,
+) -> str:
     """Speak text with OpenAI streaming, falling back to the built-in Mac voice."""
     if not text or _STOP_EVENT.is_set():
-        return
+        return "none (stopped)"
     if not config.OPENAI_API_KEY:
-        _speak_with_system_voice(text)
-        return
+        return "macOS say" if _speak_with_system_voice(text) else "none"
 
     try:
         if client is None:
@@ -197,9 +205,9 @@ def speak(text: str, client: Any | None = None) -> None:
                 api_key=config.OPENAI_API_KEY,
                 timeout=config.TTS_TIMEOUT_SECONDS,
             )
-        if _stream_openai_speech(text, client):
-            return
+        if _stream_openai_speech(text, client, mode):
+            return "OpenAI"
     except Exception:
         if _STOP_EVENT.is_set():
-            return
-    _speak_with_system_voice(text)
+            return "none (stopped)"
+    return "macOS say" if _speak_with_system_voice(text) else "none"

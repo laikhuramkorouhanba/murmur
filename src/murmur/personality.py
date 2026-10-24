@@ -93,3 +93,19 @@ def sample_sentence() -> str:
     if get_mode() is Mode.SMOOTH:
         return "Ooh, this is a short voice check. Murmur is ready to roll, cool cat."
     return "This is a short voice check. Murmur is ready."
+
+
+def tts_instructions(mode: Mode | str | None = None) -> str:
+    """Set a delivery style without asking the voice to change the text."""
+    selected = Mode(mode) if mode is not None else get_mode()
+    if selected is Mode.SMOOTH:
+        return (
+            "Relaxed, warm, a little playful, and unhurried, like a late-night radio host. "
+            "Keep every word clear. Say file names naturally and read line numbers at an easy pace. "
+            "Do not add words or change the provided text."
+        )
+    return (
+        "Clear, calm, neutral, and unhurried. Keep every word easy to understand. "
+        "Say file names naturally and read line numbers plainly. "
+        "Do not add words or change the provided text."
+    )

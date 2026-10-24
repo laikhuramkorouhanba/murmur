@@ -7,8 +7,8 @@ def test_model_voice_speed_hotkey_and_limits_are_centralized() -> None:
     assert config.SUMMARY_MAX_TOKENS == 120
     assert config.SUMMARY_TIMEOUT_SECONDS == 8
     assert config.TTS_MODEL == "gpt-4o-mini-tts"
-    assert config.VOICE == "cedar"
-    assert config.SPEECH_SPEED == 1.15
+    assert config.VOICE == "marin"
+    assert config.SPEECH_SPEED == 1.0
     assert config.HOTKEY == "<cmd>+<alt>+<shift>+m"
     assert config.SYSTEM_VOICE_RATE == 230
 
