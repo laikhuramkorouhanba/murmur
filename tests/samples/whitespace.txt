@@ -1,0 +1,4 @@
+Build finished   [0m
+
+
+Tests passed	[0m

@@ -32,3 +32,16 @@ def test_prints_watcher_error_inside_the_output_markers(monkeypatch, capsys) -> 
         "Terminal.app is not running.\n"
         "----- End of Murmur output -----\n"
     )
+
+
+def test_startup_warns_when_terminal_cannot_be_read(monkeypatch, capsys) -> None:
+    def fail_to_read() -> str:
+        raise RuntimeError("Terminal.app is not running.")
+
+    monkeypatch.setattr(app, "get_terminal_text", fail_to_read)
+
+    app.check_terminal_on_startup()
+
+    assert capsys.readouterr().err == (
+        "Murmur startup warning: Terminal.app is not running.\n"
+    )

@@ -18,7 +18,9 @@ def test_removes_colour_and_keeps_the_final_progress_state() -> None:
 
 
 def test_trims_line_ends_and_collapses_blank_lines() -> None:
-    assert clean("first   \n\n\nsecond\t\n") == "first\n\nsecond"
+    assert clean(read_sample_bytes("whitespace.txt")) == (
+        "Build finished\n\nTests passed"
+    )
 
 
 def test_turns_box_drawing_table_into_plain_text() -> None:
