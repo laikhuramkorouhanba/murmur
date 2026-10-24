@@ -1,5 +1,6 @@
 """Read the selected tab's text from an already-open Terminal.app window."""
 
+import re
 import subprocess
 
 
@@ -13,6 +14,29 @@ end tell
 '''
 _NO_WINDOWS = "MURMUR_NO_WINDOWS"
 _TIMEOUT_SECONDS = 5
+_ZSH_PROMPT = re.compile(r"^(?P<prefix>.*?)(?<!\S)%(?P<rest>[ \t]*.*)$")
+
+
+def last_command_output(text: str) -> str:
+    """Keep text after the latest recognizable zsh percent prompt."""
+    lines = text.split("\n")
+    last_command_line: int | None = None
+
+    for index, line in enumerate(lines):
+        match = _ZSH_PROMPT.match(line)
+        if match and match.group("rest").strip():
+            last_command_line = index
+
+    if last_command_line is None:
+        return "\n".join(lines[-200:])
+
+    end = len(lines)
+    for index in range(last_command_line + 1, len(lines)):
+        if _ZSH_PROMPT.match(lines[index]):
+            end = index
+            break
+
+    return "\n".join(lines[last_command_line + 1 : end])
 
 
 def get_terminal_text() -> str:
