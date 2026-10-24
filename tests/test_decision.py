@@ -133,3 +133,40 @@ def test_short_output_without_success_or_error_is_spoken_as_written() -> None:
 
 def test_long_output_is_summarised_even_without_error_words() -> None:
     assert decide("x" * 601) is Action.SUMMARISE
+
+
+from pathlib import Path
+
+import pytest
+
+from murmur.decision import AutoAction, auto_action
+
+_SAMPLES = Path(__file__).parent / "samples"
+
+
+@pytest.mark.parametrize(
+    ("seconds", "expected"),
+    [
+        (0.5, AutoAction.SILENT),
+        (1.9, AutoAction.SILENT),
+        (2.0, AutoAction.SOFT_SOUND),
+        (14.9, AutoAction.SOFT_SOUND),
+        (15.0, AutoAction.DONE_LINE),
+        (300.0, AutoAction.DONE_LINE),
+    ],
+)
+def test_successful_commands_follow_the_table(seconds, expected) -> None:
+    passing = (_SAMPLES / "pytest_pass.txt").read_text(encoding="utf-8")
+
+    assert auto_action(passing, seconds) is expected
+
+
+@pytest.mark.parametrize("seconds", [0.5, 3.0, 20.0])
+def test_errors_are_always_announced_however_long_they_took(seconds) -> None:
+    failing = (_SAMPLES / "pytest_fail.txt").read_text(encoding="utf-8")
+
+    assert auto_action(failing, seconds) is AutoAction.ANNOUNCE
+
+
+def test_a_long_command_with_no_output_gets_the_done_line() -> None:
+    assert auto_action("", 20.0) is AutoAction.DONE_LINE

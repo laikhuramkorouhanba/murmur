@@ -17,6 +17,7 @@ _LOCK = threading.Lock()
 _FAILURE_STREAK = 0
 _LAST_OPENER: str | None = None
 _LAST_CLOSER: str | None = None
+_LAST_DONE_LINE: str | None = None
 _RANDOM = random.Random()
 
 _PLAYFUL_OPENERS = (
@@ -119,6 +120,24 @@ def style_summary(facts: str, *, failed: bool) -> str:
 
     opener = _next_opener(_SUCCESS_OPENERS)
     return _with_closer(f"{opener} {facts}", facts, _SUCCESS_CLOSERS)
+
+
+_SMOOTH_DONE_LINES = (
+    "All done, smooth as butter.",
+    "All done, not a single snag.",
+    "Finished, and clean as a whistle.",
+)
+
+
+def done_line() -> str:
+    """One short line for a long command that finished without errors."""
+    global _LAST_DONE_LINE
+    if get_mode() is Mode.FOCUSED:
+        return "Done, no errors."
+    with _LOCK:
+        choices = tuple(line for line in _SMOOTH_DONE_LINES if line != _LAST_DONE_LINE)
+        _LAST_DONE_LINE = _RANDOM.choice(choices)
+        return _LAST_DONE_LINE
 
 
 def sample_sentence() -> str:

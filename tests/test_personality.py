@@ -131,3 +131,14 @@ def test_long_summaries_skip_the_closer() -> None:
     result = personality.style_summary(facts, failed=True)
 
     assert result.endswith(facts)
+
+
+def test_done_line_in_each_mode() -> None:
+    personality.set_mode(personality.Mode.FOCUSED)
+    assert personality.done_line() == "Done, no errors."
+
+    personality.set_mode(personality.Mode.SMOOTH)
+    lines = [personality.done_line() for _ in range(20)]
+    assert all(line in personality._SMOOTH_DONE_LINES for line in lines)
+    assert all(a != b for a, b in zip(lines, lines[1:]))
+    assert "All done, smooth as butter." in personality._SMOOTH_DONE_LINES

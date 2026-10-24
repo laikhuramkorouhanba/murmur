@@ -14,6 +14,15 @@ class Action(str, Enum):
     SUMMARISE = "summarise"
 
 
+class AutoAction(str, Enum):
+    """What auto-announce does when a command finishes on its own."""
+
+    SILENT = "silent"
+    SOFT_SOUND = "soft_sound"
+    DONE_LINE = "done_line"  # one short spoken line, like "Done, no errors."
+    ANNOUNCE = "announce"  # the full announcement, same as pressing the hotkey
+
+
 @dataclass(frozen=True)
 class ErrorEvidence:
     """The main error line and exact file-and-line references in output."""
@@ -46,6 +55,25 @@ _EXCEPTION_MESSAGE = re.compile(r"\b(?P<kind>[A-Za-z_]+(?:Error|Exception)):\s*(
 _COPIED_EXCEPTION_TEXT = re.compile(
     r"\b[A-Za-z_]*(?:Error|Exception):\s*[^.!?\n]+[.!?]?"
 )
+
+
+def auto_action(text: str, seconds: float) -> AutoAction:
+    """Pick what auto-announce does. Silence is the feature, so only errors get the full treatment.
+
+    | Finished command            | Auto-announce does      |
+    | --------------------------- | ----------------------- |
+    | has an error (any length)   | full announcement       |
+    | under 2 s, successful       | nothing                 |
+    | 2 s to under 15 s, success  | soft sound              |
+    | 15 s or more, successful    | one short "done" line   |
+    """
+    if contains_error(text):
+        return AutoAction.ANNOUNCE
+    if seconds < config.AUTO_SHORT_SECONDS:
+        return AutoAction.SILENT
+    if seconds >= config.AUTO_LONG_SUCCESS_SECONDS:
+        return AutoAction.DONE_LINE
+    return AutoAction.SOFT_SOUND
 
 
 def decide(text: str) -> Action:
