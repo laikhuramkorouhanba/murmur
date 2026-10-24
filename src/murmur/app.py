@@ -1,10 +1,20 @@
 """Murmur's small macOS menu bar app."""
 
 import sys
+import threading
+from collections.abc import Callable
 
+from murmur import config, voice
 from murmur.cleaner import clean
+from murmur.decision import Action, decide
+from murmur.summariser import summarise
 from murmur.watcher import get_terminal_text, last_command_output
 import rumps
+
+
+_JOB_LOCK = threading.Lock()
+_JOB_ACTIVE = False
+_JOB_CANCELLED = threading.Event()
 
 
 def print_last_output() -> None:
@@ -17,6 +27,77 @@ def print_last_output() -> None:
     except RuntimeError as error:
         print(error)
     print("----- End of Murmur output -----")
+
+
+def announce_last_output(
+    cancel_event: threading.Event | None = None,
+    *,
+    read_text: Callable[[], str] | None = None,
+) -> None:
+    """Read, clean, decide, summarise if needed, and speak on a worker thread."""
+    cancelled = cancel_event or threading.Event()
+    reader = read_text or get_terminal_text
+    print("----- Murmur: cleaned terminal output -----")
+    try:
+        cleaned = clean(last_command_output(reader()))
+    except RuntimeError as error:
+        print(error)
+        print("----- End of Murmur announcement -----")
+        return
+
+    print(cleaned or "(No output found for the last command.)")
+    if cancelled.is_set():
+        print("----- End of Murmur announcement -----")
+        return
+
+    action = decide(cleaned)
+    if action is Action.SOFT_SOUND:
+        print("----- Murmur: spoken text -----")
+        print("(none; playing the soft success sound)")
+        print("----- End of Murmur announcement -----")
+        if not cancelled.is_set():
+            voice.play_soft_sound()
+        return
+
+    spoken_text = cleaned if action is Action.SPEAK_EXACTLY else summarise(cleaned)
+    if cancelled.is_set():
+        print("----- End of Murmur announcement -----")
+        return
+
+    print("----- Murmur: spoken text -----")
+    print(spoken_text)
+    print("----- End of Murmur announcement -----")
+    voice.speak(spoken_text)
+
+
+def _run_announcement_job() -> None:
+    global _JOB_ACTIVE
+    try:
+        announce_last_output(_JOB_CANCELLED)
+    finally:
+        with _JOB_LOCK:
+            _JOB_ACTIVE = False
+
+
+def start_announcement(*, stop_if_running: bool = False) -> bool:
+    """Start one background announcement, optionally stopping the current one."""
+    global _JOB_ACTIVE
+    with _JOB_LOCK:
+        if _JOB_ACTIVE:
+            if stop_if_running:
+                _JOB_CANCELLED.set()
+                voice.stop_speech()
+            return False
+
+        _JOB_ACTIVE = True
+        _JOB_CANCELLED.clear()
+        voice.reset_stop()
+        threading.Thread(
+            target=_run_announcement_job,
+            name="murmur-announcement",
+            daemon=True,
+        ).start()
+        return True
 
 
 def check_terminal_on_startup() -> None:
@@ -35,10 +116,12 @@ class MurmurApp(rumps.App):
 
     @rumps.clicked("Read last output")
     def read_last_output(self, _sender: object) -> None:
-        print_last_output()
+        start_announcement()
 
 
 def main() -> None:
+    for warning in config.startup_warnings():
+        print(warning, file=sys.stderr)
     check_terminal_on_startup()
     MurmurApp().run()
 

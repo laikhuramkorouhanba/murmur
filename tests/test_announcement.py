@@ -1,0 +1,136 @@
+import threading
+
+import pytest
+
+from murmur import app, voice
+
+
+@pytest.fixture(autouse=True)
+def reset_job_state():
+    with app._JOB_LOCK:
+        app._JOB_ACTIVE = False
+        app._JOB_CANCELLED.clear()
+    voice.reset_stop()
+    yield
+    with app._JOB_LOCK:
+        app._JOB_ACTIVE = False
+        app._JOB_CANCELLED.clear()
+    voice.reset_stop()
+
+
+def test_announcement_prints_cleaned_output_and_plays_success_cue(monkeypatch, capsys) -> None:
+    history = "user@MacBook-Pro murmur % pytest -q\n. [100%]\n1 passed in 0.01s\nuser@MacBook-Pro murmur % "
+    cues = []
+    monkeypatch.setattr(app, "get_terminal_text", lambda: history)
+    monkeypatch.setattr(app.voice, "play_soft_sound", lambda: cues.append(True))
+
+    app.announce_last_output()
+
+    assert cues == [True]
+    assert capsys.readouterr().out == (
+        "----- Murmur: cleaned terminal output -----\n"
+        ". [100%]\n"
+        "1 passed in 0.01s\n"
+        "----- Murmur: spoken text -----\n"
+        "(none; playing the soft success sound)\n"
+        "----- End of Murmur announcement -----\n"
+    )
+
+
+def test_announcement_speaks_short_output_exactly(monkeypatch, capsys) -> None:
+    history = "user@MacBook-Pro murmur % pwd\n/Users/laikhuram/murmur\nuser@MacBook-Pro murmur % "
+    spoken = []
+    monkeypatch.setattr(app, "get_terminal_text", lambda: history)
+    monkeypatch.setattr(app.voice, "speak", spoken.append)
+
+    app.announce_last_output()
+
+    assert spoken == ["/Users/laikhuram/murmur"]
+    assert "/Users/laikhuram/murmur\n----- Murmur: spoken text -----" in capsys.readouterr().out
+
+
+def test_announcement_summarises_errors_and_speaks_the_summary(monkeypatch, capsys) -> None:
+    history = (
+        "user@MacBook-Pro murmur % pytest -q\n"
+        "FAILED demo/failing_check.py::test_total_includes_the_tip\n"
+        "demo/failing_check.py:6: AssertionError\n"
+        "user@MacBook-Pro murmur % "
+    )
+    summaries = []
+    spoken = []
+    monkeypatch.setattr(app, "get_terminal_text", lambda: history)
+    monkeypatch.setattr(app, "summarise", lambda text: (summaries.append(text) or "The test failed."))
+    monkeypatch.setattr(app.voice, "speak", spoken.append)
+
+    app.announce_last_output()
+
+    assert summaries == [
+        "FAILED demo/failing_check.py::test_total_includes_the_tip\n"
+        "demo/failing_check.py:6: AssertionError"
+    ]
+    assert spoken == ["The test failed."]
+    assert "The test failed.\n----- End of Murmur announcement -----" in capsys.readouterr().out
+
+
+def test_cancellation_during_summary_prevents_speech(monkeypatch, capsys) -> None:
+    history = "user@MacBook-Pro murmur % pytest -q\nFAILED test.py\nuser@MacBook-Pro murmur % "
+    cancelled = threading.Event()
+    spoken = []
+
+    def summarise_and_cancel(_text: str) -> str:
+        cancelled.set()
+        return "The command failed."
+
+    monkeypatch.setattr(app, "get_terminal_text", lambda: history)
+    monkeypatch.setattr(app, "summarise", summarise_and_cancel)
+    monkeypatch.setattr(app.voice, "speak", spoken.append)
+
+    app.announce_last_output(cancelled)
+
+    assert spoken == []
+    assert "The command failed." not in capsys.readouterr().out
+
+
+def test_only_one_background_job_starts_at_a_time(monkeypatch) -> None:
+    threads = []
+
+    class FakeThread:
+        def __init__(self, *, target, **kwargs):
+            self.target = target
+            self.arguments = kwargs
+            threads.append(self)
+
+        def start(self):
+            self.started = True
+
+    monkeypatch.setattr(app.threading, "Thread", FakeThread)
+    monkeypatch.setattr(app, "announce_last_output", lambda *_args: None)
+
+    assert app.start_announcement()
+    assert not app.start_announcement()
+    assert len(threads) == 1
+    assert threads[0].arguments["daemon"] is True
+    assert threads[0].started
+
+    threads[0].target()
+    assert app._JOB_ACTIVE is False
+
+
+def test_menu_action_starts_the_background_job(monkeypatch) -> None:
+    starts = []
+    monkeypatch.setattr(app, "start_announcement", lambda: starts.append(True))
+
+    app.MurmurApp.read_last_output(None, None)
+
+    assert starts == [True]
+
+
+def test_hotkey_style_repeat_can_cancel_the_current_job(monkeypatch) -> None:
+    stopped = []
+    app._JOB_ACTIVE = True
+    monkeypatch.setattr(app.voice, "stop_speech", lambda: stopped.append(True))
+
+    assert not app.start_announcement(stop_if_running=True)
+
+    assert app._JOB_CANCELLED.is_set()
+    assert stopped == [True]
