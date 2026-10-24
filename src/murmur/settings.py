@@ -13,6 +13,7 @@ from typing import Any
 PATH = Path.home() / ".murmur" / "settings.json"
 
 DEFAULTS: dict[str, Any] = {
+    "auto_announce": True,
     "double_tap_key": "right_command",
     "personality": "Smooth",
     "voice": "marin",

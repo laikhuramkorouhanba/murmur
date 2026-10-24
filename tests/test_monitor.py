@@ -101,3 +101,87 @@ def test_terminal_closing_mid_run_reports_nothing() -> None:
     detector = CompletionDetector()
 
     assert feed(detector, [snap(True), None, snap(False)]) == []
+
+
+from murmur import config
+from murmur.monitor import AutoAnnouncer
+
+
+class Script:
+    """Hands out snapshots (or errors) one per check, with a clock that ticks 1 s each time."""
+
+    def __init__(self, items):
+        self.items = list(items)
+        self.now = 0.0
+
+    def snapshot(self):
+        item = self.items.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    def clock(self):
+        self.now += 1.0
+        return self.now
+
+
+def make_announcer(items, enabled=lambda: True):
+    script = Script(items)
+    finished = []
+    announcer = AutoAnnouncer(
+        finished.append, snapshot=script.snapshot, enabled=enabled, clock=script.clock
+    )
+    return announcer, finished
+
+
+def test_announcer_reports_a_finished_command() -> None:
+    announcer, finished = make_announcer([snap(True), snap(True), snap(False)])
+
+    delays = [announcer.check_once() for _ in range(3)]
+
+    assert finished == [FinishedCommand(tty="/dev/ttys001", seconds=2.0)]
+    assert delays == [config.AUTO_POLL_SECONDS] * 3
+
+
+def test_announcer_does_not_even_ask_terminal_while_switched_off() -> None:
+    announcer, finished = make_announcer([snap(True), snap(False)], enabled=lambda: False)
+
+    for _ in range(5):
+        announcer.check_once()
+
+    assert finished == []
+    assert len(announcer._snapshot.__self__.items) == 2  # no snapshot was taken
+
+
+def test_switching_on_mid_run_still_catches_the_finish() -> None:
+    state = {"on": False}
+    announcer, finished = make_announcer([snap(True), snap(False)], enabled=lambda: state["on"])
+
+    announcer.check_once()
+    state["on"] = True
+    announcer.check_once()
+    announcer.check_once()
+
+    assert len(finished) == 1
+
+
+def test_a_problem_is_printed_once_then_checks_slow_down(capsys) -> None:
+    problem = RuntimeError("macOS blocked Murmur from controlling Terminal.app.")
+    announcer, _ = make_announcer([problem, problem, snap(False)])
+
+    assert announcer.check_once() == config.AUTO_ERROR_POLL_SECONDS
+    assert announcer.check_once() == config.AUTO_ERROR_POLL_SECONDS
+    assert announcer.check_once() == config.AUTO_POLL_SECONDS
+
+    out = capsys.readouterr().out
+    assert out.count("Murmur auto-announce paused: macOS blocked Murmur") == 1
+    assert "Terminal is reachable again." in out
+
+
+def test_a_problem_mid_run_does_not_fake_a_finish() -> None:
+    announcer, finished = make_announcer([snap(True), RuntimeError("Timed out."), snap(False)])
+
+    for _ in range(3):
+        announcer.check_once()
+
+    assert finished == []
