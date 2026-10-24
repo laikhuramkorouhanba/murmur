@@ -45,3 +45,39 @@ def test_startup_warns_when_terminal_cannot_be_read(monkeypatch, capsys) -> None
     assert capsys.readouterr().err == (
         "Murmur startup warning: Terminal.app is not running.\n"
     )
+
+
+def test_hotkey_uses_the_same_job_with_stop_on_repeat(monkeypatch) -> None:
+    callbacks = []
+    starts = []
+    sentinel_listener = object()
+
+    def fake_listener(callback):
+        callbacks.append(callback)
+        return sentinel_listener
+
+    monkeypatch.setattr(app, "start_hotkey_listener", fake_listener)
+    monkeypatch.setattr(
+        app,
+        "start_announcement",
+        lambda **kwargs: starts.append(kwargs),
+    )
+
+    app.start_hotkey()
+    callbacks[0]()
+
+    assert app._HOTKEY_LISTENER is sentinel_listener
+    assert starts == [{"stop_if_running": True}]
+
+
+def test_hotkey_permission_problem_is_a_startup_warning(monkeypatch, capsys) -> None:
+    def fail_to_listen(_callback):
+        raise RuntimeError("Enable Input Monitoring and Accessibility.")
+
+    monkeypatch.setattr(app, "start_hotkey_listener", fail_to_listen)
+
+    app.start_hotkey()
+
+    assert capsys.readouterr().err == (
+        "Murmur startup warning: Enable Input Monitoring and Accessibility.\n"
+    )

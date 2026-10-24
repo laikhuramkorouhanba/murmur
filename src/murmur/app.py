@@ -7,6 +7,7 @@ from collections.abc import Callable
 from murmur import config, voice
 from murmur.cleaner import clean
 from murmur.decision import Action, decide
+from murmur.hotkey import start_hotkey_listener
 from murmur.summariser import summarise
 from murmur.watcher import get_terminal_text, last_command_output
 import rumps
@@ -15,6 +16,7 @@ import rumps
 _JOB_LOCK = threading.Lock()
 _JOB_ACTIVE = False
 _JOB_CANCELLED = threading.Event()
+_HOTKEY_LISTENER = None
 
 
 def print_last_output() -> None:
@@ -108,6 +110,16 @@ def check_terminal_on_startup() -> None:
         print(f"Murmur startup warning: {error}", file=sys.stderr)
 
 
+def start_hotkey() -> None:
+    global _HOTKEY_LISTENER
+    try:
+        _HOTKEY_LISTENER = start_hotkey_listener(
+            lambda: start_announcement(stop_if_running=True)
+        )
+    except (ImportError, RuntimeError) as error:
+        print(f"Murmur startup warning: {error}", file=sys.stderr)
+
+
 class MurmurApp(rumps.App):
     """Show Murmur in the menu bar and provide a way to quit."""
 
@@ -123,6 +135,7 @@ def main() -> None:
     for warning in config.startup_warnings():
         print(warning, file=sys.stderr)
     check_terminal_on_startup()
+    start_hotkey()
     MurmurApp().run()
 
 
