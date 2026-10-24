@@ -18,7 +18,9 @@ _JOB_LOCK = threading.Lock()
 _JOB_ACTIVE = False
 _JOB_CANCELLED = threading.Event()
 _HOTKEY_LISTENER = None
-READ_LAST_OUTPUT_MENU_TITLE = f"Read last output ({config.HOTKEY_LABEL})"
+READ_LAST_OUTPUT_MENU_TITLE = (
+    f"Read last output ({config.HOTKEY_LABEL} or {config.DOUBLE_TAP_LABEL})"
+)
 
 
 def print_last_output() -> None:
@@ -163,13 +165,14 @@ def start_hotkey() -> bool:
             lambda: start_announcement(stop_if_running=True)
         )
         print(
-            f"Murmur hotkey: {config.HOTKEY_LABEL} starts announcements; "
-            "press it again to stop speech."
+            f"Murmur hotkey: {config.HOTKEY_LABEL} or {config.DOUBLE_TAP_LABEL} starts "
+            "announcements; press either again to stop speech."
         )
         return True
     except Exception as error:
         print(
-            f"Murmur startup warning: hotkey {config.HOTKEY_LABEL} is unavailable. {error}",
+            f"Murmur startup warning: hotkeys {config.HOTKEY_LABEL} and "
+            f"{config.DOUBLE_TAP_LABEL} are unavailable. {error}",
             file=sys.stderr,
         )
         return False

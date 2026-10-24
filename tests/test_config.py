@@ -9,9 +9,10 @@ def test_model_voice_speed_hotkey_and_limits_are_centralized() -> None:
     assert config.TTS_MODEL == "gpt-4o-mini-tts"
     assert config.VOICE == "marin"
     assert config.SPEECH_SPEED == 1.0
-    assert config.HOTKEY == "<cmd>+<alt>+<shift>+m"
+    assert config.HOTKEY_KEY_CODE == 46
+    assert config.DOUBLE_TAP_SECONDS == 0.4
     assert config.HOTKEY_LABEL == "⌘⌥⇧M"
-    assert config.SYSTEM_VOICE_RATE == 230
+    assert config.SYSTEM_VOICE_RATE == 180
 
 
 def test_missing_key_warning_says_speech_will_use_macos_voice() -> None:

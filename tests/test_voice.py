@@ -1,9 +1,15 @@
+import inspect
+
+import sounddevice
+
 from murmur import config, voice
 from murmur import personality
 
 
 class FakeOutputStream:
     def __init__(self, **kwargs):
+        # Fail like the real thing if we pass an option sounddevice does not have.
+        inspect.signature(sounddevice.RawOutputStream).bind(**kwargs)
         self.arguments = kwargs
         self.chunks: list[bytes] = []
         self.started = False
@@ -89,7 +95,6 @@ def test_soft_sound_writes_a_quiet_offline_tone(monkeypatch) -> None:
         "samplerate": 22050,
         "channels": 1,
         "dtype": "int16",
-        "start": False,
     }
     assert streams[0].chunks and len(streams[0].chunks[0]) > 0
     assert streams[0].stopped and streams[0].closed
@@ -112,7 +117,7 @@ def test_missing_key_uses_the_macos_say_command(monkeypatch) -> None:
 
     assert voice.speak("The tests passed.") == "macOS say"
 
-    assert commands == [["say", "-r", "230", "The tests passed."]]
+    assert commands == [["say", "-r", "180", "The tests passed."]]
 
 
 def test_streams_openai_audio_using_marin_and_configured_speed(monkeypatch) -> None:
@@ -161,7 +166,7 @@ def test_network_error_falls_back_to_macos_say(monkeypatch) -> None:
 
     assert voice.speak("Exact fallback text.", client=client) == "macOS say"
 
-    assert commands == [["say", "-r", "230", "Exact fallback text."]]
+    assert commands == [["say", "-r", "180", "Exact fallback text."]]
 
 
 def test_no_audio_falls_back_to_macos_say(monkeypatch) -> None:
@@ -183,7 +188,7 @@ def test_no_audio_falls_back_to_macos_say(monkeypatch) -> None:
 
     assert voice.speak("No audio arrived.", client=client) == "macOS say"
 
-    assert commands == [["say", "-r", "230", "No audio arrived."]]
+    assert commands == [["say", "-r", "180", "No audio arrived."]]
 
 
 def test_audio_late_past_five_seconds_falls_back_to_macos_say(monkeypatch) -> None:
@@ -206,7 +211,7 @@ def test_audio_late_past_five_seconds_falls_back_to_macos_say(monkeypatch) -> No
 
     assert voice.speak("Late audio.", client=client) == "macOS say"
 
-    assert commands == [["say", "-r", "230", "Late audio."]]
+    assert commands == [["say", "-r", "180", "Late audio."]]
 
 
 def test_audio_device_failure_falls_back_to_macos_say(monkeypatch) -> None:
@@ -231,7 +236,7 @@ def test_audio_device_failure_falls_back_to_macos_say(monkeypatch) -> None:
 
     assert voice.speak("Use the Mac voice.", client=client) == "macOS say"
 
-    assert commands == [["say", "-r", "230", "Use the Mac voice."]]
+    assert commands == [["say", "-r", "180", "Use the Mac voice."]]
 
 
 def test_focused_mode_uses_neutral_tts_instructions(monkeypatch) -> None:
@@ -278,3 +283,64 @@ def test_stop_speech_terminates_current_playback(monkeypatch) -> None:
     voice._ACTIVE_PROCESS = None
     voice._ACTIVE_STREAM = None
     voice.reset_stop()
+
+
+def test_fake_stream_rejects_options_real_sounddevice_does_not_have() -> None:
+    try:
+        FakeOutputStream(samplerate=24000, channels=1, dtype="int16", start=False)
+    except TypeError:
+        return
+    raise AssertionError("start=False should be rejected, like the real RawOutputStream does")
+
+
+def test_fallback_prints_the_real_reason_and_hides_the_key(monkeypatch, capsys) -> None:
+    voice.reset_stop()
+    monkeypatch.setattr(config, "OPENAI_API_KEY", "test-key")
+
+    class FakeProcess:
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(voice.subprocess, "Popen", lambda command, **_kwargs: FakeProcess())
+    error = PermissionError("Incorrect API key provided: sk-proj-abc123*****xyz9")
+    client = FakeClient(FakeSpeechCreate(error=error))
+
+    assert voice.speak("Hello.", client=client) == "macOS say"
+
+    out = capsys.readouterr().out
+    assert "Murmur: using macOS say because OpenAI speech failed (PermissionError:" in out
+    assert "sk-[hidden]" in out
+    assert "abc123" not in out
+
+
+def test_missing_key_reason_is_printed(monkeypatch, capsys) -> None:
+    voice.reset_stop()
+    monkeypatch.setattr(config, "OPENAI_API_KEY", None)
+
+    class FakeProcess:
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(voice.subprocess, "Popen", lambda command, **_kwargs: FakeProcess())
+
+    voice.speak("Hello.")
+
+    assert "Murmur: using macOS say because OPENAI_API_KEY is missing." in capsys.readouterr().out
+
+
+def test_odd_sized_audio_chunks_are_rejoined_into_whole_samples(monkeypatch) -> None:
+    voice.reset_stop()
+    monkeypatch.setattr(config, "OPENAI_API_KEY", "test-key")
+    streams: list[FakeOutputStream] = []
+
+    def make_stream(**kwargs):
+        stream = FakeOutputStream(**kwargs)
+        streams.append(stream)
+        return stream
+
+    monkeypatch.setattr(voice.sounddevice, "RawOutputStream", make_stream)
+    client = FakeClient(FakeSpeechCreate(FakeStreamingResponse([b"\x01\x02\x03", b"\x04\x05\x06"])))
+
+    assert voice.speak("Chunky.", client=client) == "OpenAI"
+
+    assert streams[0].chunks == [b"\x01\x02", b"\x03\x04\x05\x06"]

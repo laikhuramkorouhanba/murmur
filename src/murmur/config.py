@@ -21,10 +21,14 @@ VOICE = "marin"
 SPEECH_SPEED = 1.0
 TTS_TIMEOUT_SECONDS = 8
 FIRST_AUDIO_TIMEOUT_SECONDS = 5
-SYSTEM_VOICE_RATE = 230
+SYSTEM_VOICE_RATE = 180
 
-HOTKEY = "<cmd>+<alt>+<shift>+m"
+# The M key's physical key code on a Mac keyboard. We match this, not the letter,
+# because holding Option changes which letter macOS reports.
+HOTKEY_KEY_CODE = 46
 HOTKEY_LABEL = "⌘⌥⇧M"
+DOUBLE_TAP_LABEL = "Right Option twice"
+DOUBLE_TAP_SECONDS = 0.4
 
 
 def startup_warnings(api_key: str | None = OPENAI_API_KEY) -> list[str]:

@@ -1,6 +1,7 @@
 """Offline sound and speech, with streamed OpenAI voice when it is available."""
 
 import math
+import re
 import struct
 import subprocess
 import threading
@@ -18,6 +19,19 @@ _STOP_EVENT = threading.Event()
 _STATE_LOCK = threading.Lock()
 _ACTIVE_PROCESS: subprocess.Popen[bytes] | None = None
 _ACTIVE_STREAM: Any | None = None
+_SECRET_LIKE = re.compile(r"sk-[A-Za-z0-9_\-*.]+")
+
+
+def _explain(error: BaseException) -> str:
+    """Turn an error into a short reason, hiding anything that looks like an API key."""
+    message = str(error).strip() or "no details"
+    return _SECRET_LIKE.sub("sk-[hidden]", f"{type(error).__name__}: {message}")
+
+
+def _say_instead(text: str, reason: str) -> str:
+    """Tell the user why OpenAI speech was skipped, then use the Mac voice."""
+    print(f"Murmur: using macOS say because {reason}")
+    return "macOS say" if _speak_with_system_voice(text) else "none"
 
 
 def reset_stop() -> None:
@@ -94,16 +108,17 @@ def play_soft_sound() -> str:
             samplerate=_SAMPLE_RATE,
             channels=1,
             dtype="int16",
-            start=False,
         )
         _set_active_stream(stream)
         stream.start()
         stream.write(_tone_bytes())
         stream.stop()
         return "sounddevice"
-    except Exception:
+    except Exception as error:
         if not _STOP_EVENT.is_set():
-            return "macOS say" if _speak_with_system_voice("Command succeeded.") else "none"
+            return _say_instead(
+                "Command succeeded.", f"the success sound could not play ({_explain(error)})."
+            )
         return "none (stopped)"
     finally:
         _set_active_stream(None)
@@ -143,6 +158,7 @@ def _stream_openai_speech(
     requested_at = time.monotonic()
     output = None
     got_audio = False
+    leftover = b""
     request = client.audio.speech.with_streaming_response.create(
         model=config.TTS_MODEL,
         voice=config.VOICE,
@@ -167,12 +183,16 @@ def _stream_openai_speech(
                         samplerate=24000,
                         channels=1,
                         dtype="int16",
-                        start=False,
                     )
                     _set_active_stream(output)
                     output.start()
                     got_audio = True
-                output.write(chunk)
+                # Each sample is 2 bytes, so hold back a lonely last byte for the next chunk.
+                chunk = leftover + chunk
+                cut = len(chunk) - len(chunk) % 2
+                leftover = chunk[cut:]
+                if cut:
+                    output.write(chunk[:cut])
         if not got_audio and not _STOP_EVENT.is_set():
             raise TimeoutError("OpenAI returned no speech audio.")
         return not _STOP_EVENT.is_set()
@@ -195,7 +215,7 @@ def speak(
     if not text or _STOP_EVENT.is_set():
         return "none (stopped)"
     if not config.OPENAI_API_KEY:
-        return "macOS say" if _speak_with_system_voice(text) else "none"
+        return _say_instead(text, "OPENAI_API_KEY is missing.")
 
     try:
         if client is None:
@@ -207,7 +227,10 @@ def speak(
             )
         if _stream_openai_speech(text, client, mode):
             return "OpenAI"
-    except Exception:
         if _STOP_EVENT.is_set():
             return "none (stopped)"
-    return "macOS say" if _speak_with_system_voice(text) else "none"
+        return _say_instead(text, "OpenAI speech stopped early.")
+    except Exception as error:
+        if _STOP_EVENT.is_set():
+            return "none (stopped)"
+        return _say_instead(text, f"OpenAI speech failed ({_explain(error)}).")
