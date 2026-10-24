@@ -18,6 +18,8 @@ SUMMARY_MAX_INPUT_CHARS = 12000
 
 TTS_MODEL = "gpt-4o-mini-tts"
 VOICE = "marin"
+# OpenAI voices you can pick in the "Voice" menu.
+VOICES = {"marin": "Marin", "cedar": "Cedar"}
 SPEECH_SPEED = 1.0
 TTS_TIMEOUT_SECONDS = 8
 FIRST_AUDIO_TIMEOUT_SECONDS = 5

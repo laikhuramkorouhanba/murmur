@@ -10,7 +10,7 @@ from typing import Any
 
 import sounddevice
 
-from murmur import config
+from murmur import config, settings
 from murmur import personality
 
 
@@ -32,6 +32,12 @@ def _say_instead(text: str, reason: str) -> str:
     """Tell the user why OpenAI speech was skipped, then use the Mac voice."""
     print(f"Murmur: using macOS say because {reason}")
     return "macOS say" if _speak_with_system_voice(text) else "none"
+
+
+def current_voice() -> str:
+    """The voice picked in the menu, or Marin if the saved one is unknown."""
+    chosen = settings.get("voice")
+    return chosen if chosen in config.VOICES else config.VOICE
 
 
 def reset_stop() -> None:
@@ -161,7 +167,7 @@ def _stream_openai_speech(
     leftover = b""
     request = client.audio.speech.with_streaming_response.create(
         model=config.TTS_MODEL,
-        voice=config.VOICE,
+        voice=current_voice(),
         input=text,
         instructions=personality.tts_instructions(mode),
         speed=config.SPEECH_SPEED,

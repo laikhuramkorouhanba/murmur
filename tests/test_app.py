@@ -119,3 +119,15 @@ def test_double_tap_menu_saves_the_choice_and_updates_the_label() -> None:
     assert menu_app.tap_items["right_shift"].state == 1
     assert menu_app.tap_items["right_command"].state == 0
     assert menu_app.read_item.title == "Read last output (⌘⌥⇧M or Right Shift twice)"
+
+
+def test_voice_menu_saves_the_choice_and_marks_it() -> None:
+    menu_app = app.MurmurApp()
+    assert menu_app.voice_items["marin"].state == 1
+
+    menu_app.choose_voice("cedar")
+
+    assert app.settings.get("voice") == "cedar"
+    assert app.voice.current_voice() == "cedar"
+    assert menu_app.voice_items["cedar"].state == 1
+    assert menu_app.voice_items["marin"].state == 0

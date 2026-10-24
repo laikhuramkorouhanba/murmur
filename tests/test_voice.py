@@ -344,3 +344,21 @@ def test_odd_sized_audio_chunks_are_rejoined_into_whole_samples(monkeypatch) -> 
     assert voice.speak("Chunky.", client=client) == "OpenAI"
 
     assert streams[0].chunks == [b"\x01\x02", b"\x03\x04\x05\x06"]
+
+
+def test_selected_voice_is_sent_to_openai(monkeypatch) -> None:
+    voice.reset_stop()
+    monkeypatch.setattr(config, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(voice.sounddevice, "RawOutputStream", lambda **kwargs: FakeOutputStream(**kwargs))
+    voice.settings.set("voice", "cedar")
+    speech_create = FakeSpeechCreate(FakeStreamingResponse([b"\x00\x00"]))
+
+    voice.speak("Hello.", client=FakeClient(speech_create))
+
+    assert speech_create.arguments["voice"] == "cedar"
+
+
+def test_unknown_saved_voice_falls_back_to_marin() -> None:
+    voice.settings.set("voice", "robot")
+
+    assert voice.current_voice() == "marin"

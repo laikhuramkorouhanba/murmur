@@ -202,8 +202,32 @@ class MurmurApp(rumps.App):
             self.tap_items[choice] = item
             tap_menu.add(item)
 
-        self.menu.update([self.read_item, personality_menu, tap_menu])
+        self.voice_items = {}
+        voice_menu = rumps.MenuItem("Voice")
+        for choice, name in config.VOICES.items():
+            item = rumps.MenuItem(name, callback=self._voice_chooser(choice))
+            self.voice_items[choice] = item
+            voice_menu.add(item)
+
+        self.menu.update([self.read_item, personality_menu, voice_menu, tap_menu])
         self._show_tap_choice()
+        self._show_voice_choice()
+
+    def _voice_chooser(self, choice: str) -> Callable[[object], None]:
+        def choose(_sender: object) -> None:
+            self.choose_voice(choice)
+
+        return choose
+
+    def choose_voice(self, choice: str) -> None:
+        settings.set("voice", choice)
+        self._show_voice_choice()
+        print(f"Murmur voice: now {config.VOICES[choice]}.")
+
+    def _show_voice_choice(self) -> None:
+        current = voice.current_voice()
+        for choice, item in self.voice_items.items():
+            item.state = int(choice == current)
 
     def _tap_chooser(self, choice: str) -> Callable[[object], None]:
         def choose(_sender: object) -> None:
