@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 from murmur import config
-from murmur.decision import exact_fallback_text
+from murmur.decision import fallback_speech_summary
 from murmur.summariser import SUMMARY_INSTRUCTIONS, summarise
 
 
@@ -30,6 +30,7 @@ class FakeClient:
 def sample_failure() -> str:
     return (
         "FAILED demo/failing_check.py::test_total_includes_the_tip - assert 18.0 == 19.8\n"
+        "E       assert 18.0 == 19.8\n"
         "demo/failing_check.py:6: AssertionError"
     )
 
@@ -50,42 +51,46 @@ def test_uses_configured_model_prompt_and_limits(monkeypatch) -> None:
     assert completions.arguments["messages"][1]["content"] == "short output"
 
 
-def test_adds_exact_file_line_and_error_when_model_omits_them(monkeypatch) -> None:
+def test_failure_summary_says_expected_and_actual_without_raw_path(monkeypatch) -> None:
     monkeypatch.setattr(config, "OPENAI_API_KEY", "test-key")
     client = FakeClient(FakeCompletions("The test failed."))
 
     result = summarise(sample_failure(), client=client)
 
     assert result == (
-        "The test failed.\n"
-        "Exact location: demo/failing_check.py:6\n"
-        "Exact error: demo/failing_check.py:6: AssertionError"
+        "One test failed in failing check dot py, line 6: "
+        "it expected 19.8 but got 18."
     )
 
 
-def test_does_not_repeat_exact_details_already_in_summary(monkeypatch) -> None:
+def test_model_location_is_normalized_and_not_repeated(monkeypatch) -> None:
     monkeypatch.setattr(config, "OPENAI_API_KEY", "test-key")
     original = sample_failure()
-    client = FakeClient(FakeCompletions(f"Failed at {original.splitlines()[1]}"))
+    client = FakeClient(FakeCompletions("The test failed at demo/failing_check.py:6."))
 
     result = summarise(original, client=client)
 
-    assert result == f"Failed at {original.splitlines()[1]}"
+    assert result == (
+        "One test failed in failing check dot py, line 6: "
+        "it expected 19.8 but got 18."
+    )
+    assert result.count("failing check dot py, line 6") == 1
+    assert "demo/failing_check.py:6" not in result
 
 
-def test_api_error_returns_exact_error_fallback(monkeypatch) -> None:
+def test_api_error_returns_natural_error_fallback(monkeypatch) -> None:
     monkeypatch.setattr(config, "OPENAI_API_KEY", "test-key")
     original = sample_failure()
     client = FakeClient(FakeCompletions(error=TimeoutError("offline")))
 
-    assert summarise(original, client=client) == exact_fallback_text(original)
+    assert summarise(original, client=client) == fallback_speech_summary(original)
 
 
-def test_missing_key_skips_api_and_returns_fallback(monkeypatch) -> None:
+def test_missing_key_skips_api_and_returns_natural_fallback(monkeypatch) -> None:
     monkeypatch.setattr(config, "OPENAI_API_KEY", None)
     original = sample_failure()
 
-    assert summarise(original) == exact_fallback_text(original)
+    assert summarise(original) == fallback_speech_summary(original)
 
 
 def test_empty_api_response_returns_fallback(monkeypatch) -> None:
@@ -93,4 +98,4 @@ def test_empty_api_response_returns_fallback(monkeypatch) -> None:
     original = sample_failure()
     client = FakeClient(FakeCompletions("  "))
 
-    assert summarise(original, client=client) == exact_fallback_text(original)
+    assert summarise(original, client=client) == fallback_speech_summary(original)

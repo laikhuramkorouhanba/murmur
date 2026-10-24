@@ -2,7 +2,7 @@ import threading
 
 import pytest
 
-from murmur import app, voice
+from murmur import app, personality, voice
 
 
 @pytest.fixture(autouse=True)
@@ -11,11 +11,15 @@ def reset_job_state():
         app._JOB_ACTIVE = False
         app._JOB_CANCELLED.clear()
     voice.reset_stop()
+    personality.set_mode(personality.Mode.SMOOTH)
+    personality.record_result(False)
     yield
     with app._JOB_LOCK:
         app._JOB_ACTIVE = False
         app._JOB_CANCELLED.clear()
     voice.reset_stop()
+    personality.set_mode(personality.Mode.SMOOTH)
+    personality.record_result(False)
 
 
 def test_announcement_prints_cleaned_output_and_plays_success_cue(monkeypatch, capsys) -> None:
@@ -53,6 +57,7 @@ def test_announcement_summarises_errors_and_speaks_the_summary(monkeypatch, caps
     history = (
         "user@MacBook-Pro murmur % pytest -q\n"
         "FAILED demo/failing_check.py::test_total_includes_the_tip\n"
+        "E       assert 18.0 == 19.8\n"
         "demo/failing_check.py:6: AssertionError\n"
         "user@MacBook-Pro murmur % "
     )
@@ -66,11 +71,18 @@ def test_announcement_summarises_errors_and_speaks_the_summary(monkeypatch, caps
 
     assert summaries == [
         "FAILED demo/failing_check.py::test_total_includes_the_tip\n"
+        "E       assert 18.0 == 19.8\n"
         "demo/failing_check.py:6: AssertionError"
     ]
-    assert spoken[0].endswith("The test failed. Nothing we can't smooth out.")
-    assert spoken[0].startswith("Ooh, a small hiccup, cool cat.")
-    assert spoken[0] in capsys.readouterr().out
+    assert spoken[0].endswith(
+        "One test failed in failing check dot py, line 6: "
+        "it expected 19.8 but got 18. Nothing we can't smooth out."
+    )
+    assert any(spoken[0].startswith(opener) for opener in personality._PLAYFUL_OPENERS)
+    output = capsys.readouterr().out
+    assert spoken[0] in output
+    assert "demo/failing_check.py:6: AssertionError" in output
+    assert "demo/failing_check.py:6: AssertionError" not in spoken[0]
 
 
 def test_cancellation_during_summary_prevents_speech(monkeypatch, capsys) -> None:

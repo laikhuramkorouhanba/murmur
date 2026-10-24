@@ -1,21 +1,32 @@
-"""Short terminal summaries with exact-error preservation and a local fallback."""
+"""Short spoken summaries with natural error locations and a local fallback."""
 
 from typing import Any
 
 from murmur import config
-from murmur.decision import add_missing_exact_details, exact_fallback_text
+from murmur.decision import (
+    contains_error,
+    fallback_speech_summary,
+    speech_failure_summary,
+)
 
 
 SUMMARY_INSTRUCTIONS = """You summarise terminal output for a blind developer who will hear it, not read it.
 Reply in one or two short sentences, plain spoken English, with no markdown. Say first whether the command succeeded or failed.
-If it failed, give the file name, line number, and error message exactly as written in the output. Never paraphrase, shorten, or fix them.
+If it failed, say what failed and explain the actual cause. For an assertion like `assert actual == expected`, say what was expected and what was received.
+Do not include file paths, line numbers, or copy an exact error line; Murmur will add the location naturally after your summary.
 If tests ran, say how many passed and failed. Do not suggest fixes. Do not mention anything that is not in the output."""
 
 
+def _fallback(text: str) -> str:
+    if contains_error(text):
+        return fallback_speech_summary(text)
+    return "\n".join(line for line in text.splitlines()[-3:] if line.strip())
+
+
 def summarise(text: str, client: Any | None = None) -> str:
-    """Summarise output, or keep exact error details if the API is unavailable."""
+    """Summarise output, or make a natural local summary if the API is unavailable."""
     if not config.OPENAI_API_KEY:
-        return exact_fallback_text(text)
+        return _fallback(text)
 
     try:
         if client is None:
@@ -39,6 +50,8 @@ def summarise(text: str, client: Any | None = None) -> str:
         summary = response.choices[0].message.content
         if not isinstance(summary, str) or not summary.strip():
             raise ValueError("The summary response was empty.")
-        return add_missing_exact_details(summary.strip(), text)
+        if contains_error(text):
+            return speech_failure_summary(text, summary.strip())
+        return summary.strip()
     except Exception:
-        return exact_fallback_text(text)
+        return _fallback(text)

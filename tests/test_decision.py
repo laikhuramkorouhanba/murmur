@@ -2,7 +2,14 @@ from pathlib import Path
 
 import pytest
 
-from murmur.decision import Action, add_missing_exact_details, decide, find_error_evidence
+from murmur.decision import (
+    Action,
+    decide,
+    fallback_speech_summary,
+    find_error_evidence,
+    natural_file_location,
+    speech_failure_summary,
+)
 from murmur.cleaner import clean
 
 
@@ -48,23 +55,69 @@ def test_finds_traceback_error_and_each_location() -> None:
     )
 
 
-def test_adds_exact_error_line_and_missing_locations_to_summary() -> None:
-    original = sample("pytest_fail.txt")
+def test_speech_summary_names_failure_location_and_assertion_cause_naturally() -> None:
+    result = speech_failure_summary(sample("pytest_fail.txt"), "The test failed.")
 
-    summary = add_missing_exact_details("The test failed.", original)
+    assert result == (
+        "One test failed in failing check dot py, line 6: "
+        "it expected 19.8 but got 18."
+    )
+    assert "demo/failing_check.py:6" not in result
+    assert "AssertionError" not in result
 
-    assert summary == (
-        "The test failed.\n"
-        "Exact location: demo/failing_check.py:6\n"
-        "Exact error: demo/failing_check.py:6: AssertionError"
+
+def test_offline_failure_summary_explains_type_error_in_natural_path_form() -> None:
+    original = sample("zsh_percent_in_traceback.txt")
+    result = fallback_speech_summary(original)
+
+    assert result == (
+        "One test failed because the formatter was given too few arguments. "
+        "The error is in app dot py, line 2."
+    )
+    assert "app.py:2" not in result
+
+
+def test_naturalizes_file_name_without_speaking_directory_punctuation() -> None:
+    assert natural_file_location("demo/failing_check.py:6") == "failing check dot py, line 6"
+
+
+def test_sanitizes_a_machine_location_from_model_text_and_adds_it_once() -> None:
+    original = "E       TypeError: bad value\napp.py:2: TypeError"
+    result = speech_failure_summary(
+        original,
+        "The formatter received a bad value at app.py:2.",
+    )
+
+    assert result == (
+        "The command failed because the formatter received a bad value. "
+        "The error is in app dot py, line 2."
     )
 
 
-def test_does_not_duplicate_details_already_in_summary() -> None:
-    original = sample("pytest_fail.txt")
-    summary = "Failure at demo/failing_check.py:6: demo/failing_check.py:6: AssertionError"
+def test_failure_summary_includes_passed_and_failed_test_counts() -> None:
+    original = (
+        "3 passed, 1 failed\n"
+        "E       assert 18.0 == 19.8\n"
+        "demo/failing_check.py:6: AssertionError"
+    )
 
-    assert add_missing_exact_details(summary, original) == summary
+    result = fallback_speech_summary(original)
+
+    assert result == (
+        "3 tests passed and one test failed in failing check dot py, line 6: "
+        "it expected 19.8 but got 18."
+    )
+
+
+def test_spoken_fallback_does_not_read_a_copied_exception_line_verbatim() -> None:
+    original = sample("zsh_percent_in_traceback.txt")
+    exact_message = "TypeError: not enough arguments for format string"
+
+    result = speech_failure_summary(original, exact_message)
+
+    assert result == fallback_speech_summary(original)
+    assert exact_message not in result
+    assert "app.py:2" not in result
 
 
 def test_short_output_without_success_or_error_is_spoken_as_written() -> None:

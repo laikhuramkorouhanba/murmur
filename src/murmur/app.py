@@ -6,7 +6,7 @@ from collections.abc import Callable
 
 from murmur import config, voice
 from murmur.cleaner import clean
-from murmur.decision import Action, contains_error, decide
+from murmur.decision import Action, contains_error, decide, speech_failure_summary
 from murmur.hotkey import start_hotkey_listener
 from murmur import personality
 from murmur.summariser import summarise
@@ -64,9 +64,13 @@ def announce_last_output(
             voice.play_soft_sound()
         return
 
-    spoken_text = cleaned if action is Action.SPEAK_EXACTLY else personality.style_summary(
-        summarise(cleaned), failed=failed
-    )
+    if action is Action.SPEAK_EXACTLY:
+        spoken_text = cleaned
+    else:
+        summary = summarise(cleaned)
+        if failed:
+            summary = speech_failure_summary(cleaned, summary)
+        spoken_text = personality.style_summary(summary, failed=failed)
     if cancelled.is_set():
         print("----- End of Murmur announcement -----")
         return
