@@ -113,3 +113,68 @@ def test_explains_osascript_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with pytest.raises(RuntimeError, match="read Terminal.app history after 5 seconds"):
         watcher.get_terminal_text()
+
+
+def test_snapshot_reads_tty_busy_and_processes(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return completed(stdout="/dev/ttys003\ttrue\tlogin,-zsh,python3\n")
+
+    monkeypatch.setattr(watcher.subprocess, "run", fake_run)
+
+    assert watcher.tab_snapshot() == watcher.TabSnapshot(
+        tty="/dev/ttys003", busy=True, processes=("login", "-zsh", "python3")
+    )
+    assert len(calls) == 1  # one cheap call, not two
+    assert 'if application "Terminal" is not running' in calls[0][2]
+
+
+@pytest.mark.parametrize("answer", ["MURMUR_NOT_RUNNING", "MURMUR_NO_WINDOWS", "MURMUR_NO_TAB", ""])
+def test_snapshot_is_none_when_there_is_nothing_to_watch(monkeypatch, answer) -> None:
+    monkeypatch.setattr(watcher.subprocess, "run", lambda *a, **k: completed(stdout=answer + "\n"))
+
+    assert watcher.tab_snapshot() is None
+
+
+def test_snapshot_complains_about_a_strange_answer(monkeypatch) -> None:
+    monkeypatch.setattr(watcher.subprocess, "run", lambda *a, **k: completed(stdout="what\n"))
+
+    with pytest.raises(RuntimeError, match="Could not understand"):
+        watcher.tab_snapshot()
+
+
+def test_snapshot_passes_on_the_permission_message(monkeypatch) -> None:
+    monkeypatch.setattr(
+        watcher.subprocess,
+        "run",
+        lambda *a, **k: completed(returncode=1, stderr="Not authorized to send Apple events (-1743)"),
+    )
+
+    with pytest.raises(RuntimeError, match="Privacy & Security → Automation"):
+        watcher.tab_snapshot()
+
+
+def test_reads_a_specific_tab_by_its_tty(monkeypatch) -> None:
+    scripts = []
+    monkeypatch.setattr(
+        watcher.subprocess,
+        "run",
+        lambda command, **k: (scripts.append(command[2]) or completed(stdout="% make\nok\n")),
+    )
+
+    assert watcher.get_tab_text("/dev/ttys007") == "% make\nok\n"
+    assert 'if tty of theTab is "/dev/ttys007"' in scripts[0]
+
+
+def test_closed_tab_gives_a_clear_message(monkeypatch) -> None:
+    monkeypatch.setattr(watcher.subprocess, "run", lambda *a, **k: completed(stdout="MURMUR_NO_TAB\n"))
+
+    with pytest.raises(RuntimeError, match="closed before Murmur could read it"):
+        watcher.get_tab_text("/dev/ttys007")
+
+
+def test_refuses_an_odd_tty_instead_of_putting_it_in_applescript() -> None:
+    with pytest.raises(RuntimeError, match="unexpected Terminal tab name"):
+        watcher.get_tab_text('/dev/ttys1" & do shell script "rm')
