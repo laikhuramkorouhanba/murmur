@@ -31,7 +31,7 @@ def welcome_text(
         outro = "Ready when you are."
 
     shortcuts = (
-        f"Tap {tap} twice for results. Backup: {config.HOTKEY_SPOKEN}. "
+        f"Tap {tap} for results. Backup: {config.HOTKEY_SPOKEN}. "
         "Repeat either shortcut to stop speech."
     )
     permission_notes = []

@@ -37,6 +37,7 @@ def test_welcome_greets_and_explains_both_shortcuts_without_unneeded_permissions
     assert text.startswith("Welcome to Murmur.")
     assert "Backup: Command Option Shift M" in text
     assert "Tap Right Command twice" in text
+    assert "twice twice" not in text
     assert "Repeat either shortcut to stop speech" in text
     assert "Automation" not in text
     assert "Accessibility" not in text
