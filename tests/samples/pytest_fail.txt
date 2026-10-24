@@ -1,0 +1,13 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________________________ test_total_includes_the_tip __________________________
+
+    def test_total_includes_the_tip() -> None:
+        total = 18.00
+>       assert total == 19.80
+E       assert 18.0 == 19.8
+
+demo/failing_check.py:6: AssertionError
+=========================== short test summary info ============================
+FAILED demo/failing_check.py::test_total_includes_the_tip - assert 18.0 == 19.8
+1 failed in 0.06s

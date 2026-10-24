@@ -1,0 +1,2 @@
+[33mDownloading: 0%[0m[32mDownloading: 50%[0m[32mDownloading: 100%[0m
+Finished installing package.
