@@ -43,11 +43,15 @@ def decide(text: str) -> Action:
     text = text.strip()
     if not text:
         return Action.SOFT_SOUND
-    if _ERROR_WORD.search(text) or len(text) > config.SUMMARY_TRIGGER_CHARS:
+    if contains_error(text) or len(text) > config.SUMMARY_TRIGGER_CHARS:
         return Action.SUMMARISE
     if _SUCCESS.search(text):
         return Action.SOFT_SOUND
     return Action.SPEAK_EXACTLY
+
+
+def contains_error(text: str) -> bool:
+    return _ERROR_WORD.search(text) is not None
 
 
 def find_error_evidence(text: str) -> ErrorEvidence:

@@ -6,8 +6,9 @@ from collections.abc import Callable
 
 from murmur import config, voice
 from murmur.cleaner import clean
-from murmur.decision import Action, decide
+from murmur.decision import Action, contains_error, decide
 from murmur.hotkey import start_hotkey_listener
+from murmur import personality
 from murmur.summariser import summarise
 from murmur.watcher import get_terminal_text, last_command_output
 import rumps
@@ -48,6 +49,8 @@ def announce_last_output(
         return
 
     print(cleaned or "(No output found for the last command.)")
+    failed = contains_error(cleaned)
+    personality.record_result(failed)
     if cancelled.is_set():
         print("----- End of Murmur announcement -----")
         return
@@ -61,7 +64,9 @@ def announce_last_output(
             voice.play_soft_sound()
         return
 
-    spoken_text = cleaned if action is Action.SPEAK_EXACTLY else summarise(cleaned)
+    spoken_text = cleaned if action is Action.SPEAK_EXACTLY else personality.style_summary(
+        summarise(cleaned), failed=failed
+    )
     if cancelled.is_set():
         print("----- End of Murmur announcement -----")
         return
@@ -125,6 +130,23 @@ class MurmurApp(rumps.App):
 
     def __init__(self) -> None:
         super().__init__("Murmur", quit_button="Quit")
+        smooth = rumps.MenuItem("Smooth", callback=self.choose_smooth)
+        focused = rumps.MenuItem("Focused", callback=self.choose_focused)
+        smooth.state = 1
+        personality_menu = rumps.MenuItem("Personality")
+        personality_menu.update([smooth, focused])
+        self.menu.update([personality_menu])
+
+    def _choose_personality(self, mode: personality.Mode) -> None:
+        personality.set_mode(mode)
+        self.menu["Personality"]["Smooth"].state = int(mode is personality.Mode.SMOOTH)
+        self.menu["Personality"]["Focused"].state = int(mode is personality.Mode.FOCUSED)
+
+    def choose_smooth(self, _sender: object) -> None:
+        self._choose_personality(personality.Mode.SMOOTH)
+
+    def choose_focused(self, _sender: object) -> None:
+        self._choose_personality(personality.Mode.FOCUSED)
 
     @rumps.clicked("Read last output")
     def read_last_output(self, _sender: object) -> None:

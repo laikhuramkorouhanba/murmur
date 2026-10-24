@@ -68,8 +68,9 @@ def test_announcement_summarises_errors_and_speaks_the_summary(monkeypatch, caps
         "FAILED demo/failing_check.py::test_total_includes_the_tip\n"
         "demo/failing_check.py:6: AssertionError"
     ]
-    assert spoken == ["The test failed."]
-    assert "The test failed.\n----- End of Murmur announcement -----" in capsys.readouterr().out
+    assert spoken[0].endswith("The test failed. Nothing we can't smooth out.")
+    assert spoken[0].startswith("Ooh, a small hiccup, cool cat.")
+    assert spoken[0] in capsys.readouterr().out
 
 
 def test_cancellation_during_summary_prevents_speech(monkeypatch, capsys) -> None:
