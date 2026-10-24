@@ -39,6 +39,19 @@ DOUBLE_TAP_KEYS = {
 }
 DOUBLE_TAP_SECONDS = 0.4
 
+# Auto-announce: how often we peek at Terminal, and how we treat finished commands.
+AUTO_POLL_SECONDS = 1.0
+AUTO_ERROR_POLL_SECONDS = 5.0  # slower while something is wrong, so errors don't spam
+AUTO_SHORT_SECONDS = 2.0  # quicker than this and successful: stay silent
+AUTO_LONG_SUCCESS_SECONDS = 15.0  # this long and successful: say one short line
+# Full-screen or never-ending programs. Leaving them is not a "finished command".
+AUTO_IGNORED_PROGRAMS = frozenset(
+    {
+        "vim", "nvim", "vi", "nano", "emacs", "less", "more", "man",
+        "top", "htop", "btop", "ssh", "mosh", "tmux", "screen", "watch",
+    }
+)
+
 
 def startup_warnings(api_key: str | None = OPENAI_API_KEY) -> list[str]:
     """Return plain warnings without ever including the API key itself."""
