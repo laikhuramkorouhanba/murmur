@@ -1,15 +1,16 @@
-"""Read the selected tab's text from an already-open Terminal.app window."""
+"""Read the selected tab's history from an already-open Terminal.app window."""
 
 import re
 import subprocess
 
 
-_APPLE_SCRIPT = '''
+_RUNNING_SCRIPT = 'application "Terminal" is running'
+_HISTORY_SCRIPT = '''
 tell application "Terminal"
     if (count of windows) is 0 then
         return "MURMUR_NO_WINDOWS"
     end if
-    return contents of selected tab of front window
+    return history of selected tab of front window
 end tell
 '''
 _NO_WINDOWS = "MURMUR_NO_WINDOWS"
@@ -39,27 +40,10 @@ def last_command_output(text: str) -> str:
     return "\n".join(lines[last_command_line + 1 : end])
 
 
-def get_terminal_text() -> str:
-    """Return Terminal's selected-tab scrollback, or explain why it is unavailable."""
-    try:
-        running = subprocess.run(
-            ["pgrep", "-x", "Terminal"],
-            capture_output=True,
-            text=True,
-            timeout=_TIMEOUT_SECONDS,
-            check=False,
-        )
-    except FileNotFoundError as error:
-        raise RuntimeError("Murmur can read Terminal.app only on macOS.") from error
-    except subprocess.TimeoutExpired as error:
-        raise RuntimeError("Checking whether Terminal.app is open timed out.") from error
-
-    if running.returncode != 0:
-        raise RuntimeError("Terminal.app is not running. Open Terminal.app and try again.")
-
+def _run_osascript(script: str, action: str) -> subprocess.CompletedProcess[str]:
     try:
         result = subprocess.run(
-            ["osascript", "-e", _APPLE_SCRIPT],
+            ["osascript", "-e", script],
             capture_output=True,
             text=True,
             timeout=_TIMEOUT_SECONDS,
@@ -68,16 +52,33 @@ def get_terminal_text() -> str:
     except FileNotFoundError as error:
         raise RuntimeError("Murmur could not find osascript. This feature needs macOS.") from error
     except subprocess.TimeoutExpired as error:
-        raise RuntimeError("Reading Terminal.app took longer than 5 seconds.") from error
+        raise RuntimeError(f"Timed out while trying to {action} after 5 seconds.") from error
 
     if result.returncode != 0:
         details = result.stderr.strip()
         if "-1743" in details or "not authorized" in details.lower():
             raise RuntimeError(
-                "macOS blocked Murmur from reading Terminal.app. Allow Terminal control in "
+                "macOS blocked Murmur from controlling Terminal.app. Allow Terminal control in "
                 "System Settings → Privacy & Security → Automation."
             )
-        raise RuntimeError(f"Could not read Terminal.app: {details or 'AppleScript failed.'}")
+        raise RuntimeError(f"Could not {action}: {details or 'AppleScript failed.'}")
+
+    return result
+
+
+def get_terminal_text() -> str:
+    """Return Terminal's selected-tab scrollback, or explain why it is unavailable."""
+    running = _run_osascript(_RUNNING_SCRIPT, "check whether Terminal.app is running")
+    running_state = running.stdout.strip()
+    if running_state == "false":
+        raise RuntimeError("Terminal.app is not running. Open Terminal.app and try again.")
+    if running_state != "true":
+        raise RuntimeError(
+            "Could not determine whether Terminal.app is running; "
+            f"osascript returned {running.stdout!r}."
+        )
+
+    result = _run_osascript(_HISTORY_SCRIPT, "read Terminal.app history")
 
     if result.stdout.strip() == _NO_WINDOWS:
         raise RuntimeError("Terminal.app has no windows open. Open a window and try again.")
