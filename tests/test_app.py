@@ -1,4 +1,5 @@
 from murmur import app
+import rumps
 
 
 def test_prints_cleaned_output_with_a_header_and_footer(
@@ -96,3 +97,12 @@ def test_successful_hotkey_startup_prints_the_shortcut(monkeypatch, capsys) -> N
 
 def test_menu_title_displays_the_global_shortcut() -> None:
     assert app.READ_LAST_OUTPUT_MENU_TITLE == "Read last output (⌘⌥⇧M)"
+
+
+def test_menu_registers_shortcut_label_and_test_voice_item() -> None:
+    menu_app = app.MurmurApp()
+    for register in rumps.clicked.__dict__.get("*buttons", []):
+        register(menu_app)
+
+    assert app.READ_LAST_OUTPUT_MENU_TITLE in menu_app.menu
+    assert "Test voice" in menu_app.menu

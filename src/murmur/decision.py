@@ -202,14 +202,15 @@ def speech_failure_summary(text: str, summary: str) -> str:
     facts = _COPIED_EXCEPTION_TEXT.sub("", facts)
     facts = _FILE_LOCATION.sub("", facts)
     if location:
-        facts = re.sub(re.escape(location), "", facts, flags=re.IGNORECASE)
         facts = facts.replace(f"The error is in {location}.", "")
+        facts = facts.replace(f"The failure is in {location}.", "")
         facts = re.sub(
             rf"\b(?:at|in|near|from)\s+{re.escape(location)}\b",
             "",
             facts,
             flags=re.IGNORECASE,
         )
+        facts = re.sub(re.escape(location), "", facts, flags=re.IGNORECASE)
     facts = re.sub(r"\b(?:at|in|near|from)\s*(?=[,.:;!?]|$)", " ", facts, flags=re.IGNORECASE)
     facts = re.sub(r"\s+([,.:;!?])", r"\1", facts)
     facts = re.sub(r"\s{2,}", " ", facts).strip(" \t\r\n,;:-")

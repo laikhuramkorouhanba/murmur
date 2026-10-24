@@ -120,6 +120,13 @@ def test_spoken_fallback_does_not_read_a_copied_exception_line_verbatim() -> Non
     assert "app.py:2" not in result
 
 
+def test_normalizing_an_already_natural_fallback_does_not_repeat_its_location() -> None:
+    original = sample("zsh_percent_in_traceback.txt")
+    fallback = fallback_speech_summary(original)
+
+    assert speech_failure_summary(original, fallback) == fallback
+
+
 def test_short_output_without_success_or_error_is_spoken_as_written() -> None:
     assert decide("/Users/laikhuram/project") is Action.SPEAK_EXACTLY
 
