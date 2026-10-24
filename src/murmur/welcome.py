@@ -1,6 +1,14 @@
 """The short spoken welcome Murmur gives the very first time it starts."""
 
-from murmur import config, hotkey, personality
+from murmur import config, hotkey, personality, watcher
+
+
+def missing_permissions() -> list[str]:
+    """List only permissions that macOS currently reports as unavailable."""
+    missing = hotkey.missing_permissions()
+    if watcher.automation_permission_missing():
+        missing.insert(0, "Automation")
+    return missing
 
 
 def welcome_text(
@@ -9,35 +17,37 @@ def welcome_text(
     app_name: str | None = None,
     missing: list[str] | None = None,
 ) -> str:
-    """Build the welcome: who Murmur is, the shortcuts, and every permission it needs."""
+    """Build a brief welcome with shortcut help and only missing permissions."""
     selected = personality.Mode(mode) if mode is not None else personality.get_mode()
     app = app_name or hotkey.launching_app_name()
-    missing = hotkey.missing_permissions() if missing is None else missing
+    missing = missing_permissions() if missing is None else missing
     tap = hotkey.double_tap_label()
 
     if selected is personality.Mode.SMOOTH:
-        intro = (
-            "Hey there, I'm Murmur. I keep an ear on Terminal and tell you how your "
-            "commands went, so you don't have to read the screen."
-        )
-        outro = "That's it. Replay welcome in the Murmur menu plays this again. Have fun, cool cat."
+        intro = "Hey, Murmur here."
+        outro = "Let's go, cool cat."
     else:
-        intro = "Welcome to Murmur. It reads your last Terminal command and tells you how it went."
-        outro = "To hear this again, choose Replay welcome in the Murmur menu."
+        intro = "Welcome to Murmur."
+        outro = "Ready when you are."
 
     shortcuts = (
-        f"To hear the last result, press {config.HOTKEY_SPOKEN}, or tap {tap}. "
-        "Press either one again to stop the speech."
+        f"Tap {tap} twice for results. Backup: {config.HOTKEY_SPOKEN}. "
+        "Repeat either shortcut to stop speech."
     )
-    permissions = (
-        "Murmur needs three macOS permissions, all in System Settings, then Privacy and Security. "
-        f"One: Automation. Allow {app} to control Terminal, so Murmur can read the Terminal window. "
-        f"Two and three: Accessibility, and Input Monitoring. Turn on {app} in both, "
-        f"so the shortcuts work from any app. Then quit and reopen {app}."
-    )
-    if missing:
-        status = f"Right now, {' and '.join(missing)} still needs turning on."
-    else:
-        status = "Accessibility and Input Monitoring are already on."
+    permission_notes = []
+    if "Automation" in missing:
+        permission_notes.append(
+            f"Missing Automation: allow {app} to control Terminal in "
+            "System Settings → Privacy & Security → Automation."
+        )
+    keyboard_missing = [
+        name for name in ("Accessibility", "Input Monitoring") if name in missing
+    ]
+    if keyboard_missing:
+        names = " and ".join(keyboard_missing)
+        permission_notes.append(
+            f"Missing {names}; "
+            f"enable {app} in System Settings → Privacy & Security."
+        )
 
-    return " ".join((intro, shortcuts, permissions, status, outro))
+    return " ".join((intro, shortcuts, *permission_notes, outro))

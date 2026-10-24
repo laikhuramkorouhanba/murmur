@@ -148,7 +148,9 @@ def test_every_menu_item_has_plain_spoken_words() -> None:
     assert spoken(menu_app.voice_menu) == "Voice, currently Marin"
     assert spoken(menu_app.tap_menu) == "Double-tap key, currently Right Command"
     assert spoken(menu_app.test_voice_item) == "Test voice: speak a sample sentence"
-    assert spoken(menu_app.welcome_item) == "Replay welcome: hear the shortcuts and permissions again"
+    assert spoken(menu_app.welcome_item) == (
+        "Replay welcome: hear the shortcuts and missing permission help again"
+    )
     assert spoken(menu_app.tap_items["right_shift"]) == "Right Shift: tap it twice to read the last output"
     assert menu_app.quit_button.title == "Quit Murmur"
 

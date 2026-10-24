@@ -5,6 +5,13 @@ import subprocess
 
 
 _RUNNING_SCRIPT = 'application "Terminal" is running'
+_AUTOMATION_CHECK_SCRIPT = '''
+if application "Terminal" is running then
+    tell application "Terminal" to get count of windows
+else
+    return 0
+end if
+'''
 _HISTORY_SCRIPT = '''
 tell application "Terminal"
     if (count of windows) is 0 then
@@ -66,6 +73,15 @@ def _run_osascript(script: str, action: str) -> subprocess.CompletedProcess[str]
         raise RuntimeError(f"Could not {action}: {details or 'AppleScript failed.'}")
 
     return result
+
+
+def automation_permission_missing() -> bool:
+    """Return true only when macOS specifically blocks Terminal automation."""
+    try:
+        _run_osascript(_AUTOMATION_CHECK_SCRIPT, "check Terminal.app automation access")
+    except RuntimeError as error:
+        return "macOS blocked Murmur from controlling Terminal.app." in str(error)
+    return False
 
 
 def get_terminal_text() -> str:

@@ -77,6 +77,30 @@ def test_explains_automation_permission_denial(monkeypatch: pytest.MonkeyPatch) 
         watcher.get_terminal_text()
 
 
+def test_automation_permission_check_only_flags_macos_denial(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        watcher.subprocess,
+        "run",
+        lambda *args, **kwargs: completed(1, stderr="Not authorized to send Apple events (-1743)"),
+    )
+
+    assert watcher.automation_permission_missing()
+
+    monkeypatch.setattr(
+        watcher.subprocess,
+        "run",
+        lambda *args, **kwargs: completed(stdout="true\n"),
+    )
+    assert not watcher.automation_permission_missing()
+
+    monkeypatch.setattr(
+        watcher.subprocess,
+        "run",
+        lambda *args, **kwargs: completed(stdout="false\n"),
+    )
+    assert not watcher.automation_permission_missing()
+
+
 def test_explains_osascript_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         if command[2] == watcher._RUNNING_SCRIPT:

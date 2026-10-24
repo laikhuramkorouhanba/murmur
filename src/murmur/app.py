@@ -273,7 +273,10 @@ class MurmurApp(rumps.App):
         self.test_voice_item = rumps.MenuItem("Test voice", callback=self.test_voice)
         _speak_label(self.test_voice_item, "Test voice: speak a sample sentence")
         self.welcome_item = rumps.MenuItem("Replay welcome", callback=self.replay_welcome)
-        _speak_label(self.welcome_item, "Replay welcome: hear the shortcuts and permissions again")
+        _speak_label(
+            self.welcome_item,
+            "Replay welcome: hear the shortcuts and missing permission help again",
+        )
 
         self.menu.update(
             [
