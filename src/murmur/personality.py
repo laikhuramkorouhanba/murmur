@@ -5,6 +5,8 @@ import random
 import re
 import threading
 
+from murmur import settings
+
 
 class Mode(str, Enum):
     SMOOTH = "Smooth"
@@ -12,7 +14,6 @@ class Mode(str, Enum):
 
 
 _LOCK = threading.Lock()
-_MODE = Mode.SMOOTH
 _FAILURE_STREAK = 0
 _LAST_OPENER: str | None = None
 _LAST_CLOSER: str | None = None
@@ -54,14 +55,14 @@ _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
 
 
 def get_mode() -> Mode:
-    with _LOCK:
-        return _MODE
+    try:
+        return Mode(settings.get("personality"))
+    except (TypeError, ValueError):
+        return Mode.SMOOTH
 
 
 def set_mode(mode: Mode | str) -> None:
-    global _MODE
-    with _LOCK:
-        _MODE = Mode(mode)
+    settings.set("personality", Mode(mode).value)
 
 
 def record_result(failed: bool) -> int:

@@ -1,9 +1,23 @@
 from murmur import personality
+from murmur import settings
 from murmur.app import MurmurApp
 
 
 def test_smooth_is_the_default_mode() -> None:
     personality.set_mode(personality.Mode.SMOOTH)
+
+    assert personality.get_mode() is personality.Mode.SMOOTH
+    assert settings.get("personality") == "Smooth"
+
+
+def test_personality_choice_is_loaded_from_saved_settings() -> None:
+    settings.set("personality", "Focused")
+
+    assert personality.get_mode() is personality.Mode.FOCUSED
+
+
+def test_unknown_saved_personality_falls_back_to_smooth() -> None:
+    settings.set("personality", "Loud")
 
     assert personality.get_mode() is personality.Mode.SMOOTH
 
@@ -63,6 +77,7 @@ def test_menu_selects_and_marks_the_current_mode() -> None:
     app.choose_focused(None)
 
     assert personality.get_mode() is personality.Mode.FOCUSED
+    assert settings.get("personality") == "Focused"
     assert menu["Smooth"].state == 0
     assert menu["Focused"].state == 1
 
