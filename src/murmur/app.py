@@ -7,7 +7,7 @@ from collections.abc import Callable
 from murmur import config, voice
 from murmur.cleaner import clean
 from murmur.decision import Action, contains_error, decide, speech_failure_summary
-from murmur import hotkey, settings
+from murmur import hotkey, settings, welcome
 from murmur.hotkey import start_hotkey_listener
 from murmur import personality
 from murmur.summariser import summarise
@@ -118,6 +118,23 @@ def _run_test_voice_job() -> None:
             _JOB_ACTIVE = False
 
 
+def _run_welcome_job() -> None:
+    global _JOB_ACTIVE
+    try:
+        # Mark it done straight away, so a quit halfway through never makes it nag again.
+        settings.set("welcome_done", True)
+        mode = personality.get_mode()
+        text = welcome.welcome_text(mode)
+        print("----- Murmur: welcome -----")
+        print(text)
+        engine = "none (stopped)" if _JOB_CANCELLED.is_set() else voice.speak(text, mode=mode)
+        print(f"Voice engine: {engine}")
+        print("----- End of Murmur welcome -----")
+    finally:
+        with _JOB_LOCK:
+            _JOB_ACTIVE = False
+
+
 def _start_background_job(
     target: Callable[[], None],
     name: str,
@@ -151,6 +168,18 @@ def start_announcement(*, stop_if_running: bool = False) -> bool:
 def start_test_voice() -> bool:
     """Speak the selected mode's sample sentence in the background."""
     return _start_background_job(_run_test_voice_job, "murmur-test-voice")
+
+
+def start_welcome() -> bool:
+    """Speak the welcome in the background. The hotkey can stop it like any speech."""
+    return _start_background_job(_run_welcome_job, "murmur-welcome")
+
+
+def welcome_if_first_run() -> bool:
+    """Play the welcome only the very first time Murmur starts."""
+    if settings.get("welcome_done"):
+        return False
+    return start_welcome()
 
 
 def check_terminal_on_startup() -> None:
@@ -264,12 +293,17 @@ class MurmurApp(rumps.App):
     def test_voice(self, _sender: object) -> None:
         start_test_voice()
 
+    @rumps.clicked("Replay welcome")
+    def replay_welcome(self, _sender: object) -> None:
+        start_welcome()
+
 
 def main() -> None:
     for warning in config.startup_warnings():
         print(warning, file=sys.stderr)
     check_terminal_on_startup()
     start_hotkey()
+    welcome_if_first_run()
     MurmurApp().run()
 
 
