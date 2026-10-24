@@ -95,8 +95,30 @@ def _run_announcement_job() -> None:
             _JOB_ACTIVE = False
 
 
-def start_announcement(*, stop_if_running: bool = False) -> bool:
-    """Start one background announcement, optionally stopping the current one."""
+def _run_test_voice_job() -> None:
+    global _JOB_ACTIVE
+    try:
+        mode = personality.get_mode()
+        sentence = personality.sample_sentence()
+        print("----- Murmur: test voice -----")
+        print(sentence)
+        if _JOB_CANCELLED.is_set():
+            engine = "none (stopped)"
+        else:
+            engine = voice.speak(sentence, mode=mode)
+        print(f"Voice engine: {engine}")
+        print("----- End of Murmur voice test -----")
+    finally:
+        with _JOB_LOCK:
+            _JOB_ACTIVE = False
+
+
+def _start_background_job(
+    target: Callable[[], None],
+    name: str,
+    *,
+    stop_if_running: bool = False,
+) -> bool:
     global _JOB_ACTIVE
     with _JOB_LOCK:
         if _JOB_ACTIVE:
@@ -108,12 +130,22 @@ def start_announcement(*, stop_if_running: bool = False) -> bool:
         _JOB_ACTIVE = True
         _JOB_CANCELLED.clear()
         voice.reset_stop()
-        threading.Thread(
-            target=_run_announcement_job,
-            name="murmur-announcement",
-            daemon=True,
-        ).start()
+        threading.Thread(target=target, name=name, daemon=True).start()
         return True
+
+
+def start_announcement(*, stop_if_running: bool = False) -> bool:
+    """Start one background announcement, optionally stopping the current one."""
+    return _start_background_job(
+        _run_announcement_job,
+        "murmur-announcement",
+        stop_if_running=stop_if_running,
+    )
+
+
+def start_test_voice() -> bool:
+    """Speak the selected mode's sample sentence in the background."""
+    return _start_background_job(_run_test_voice_job, "murmur-test-voice")
 
 
 def check_terminal_on_startup() -> None:
@@ -169,6 +201,10 @@ class MurmurApp(rumps.App):
     @rumps.clicked(READ_LAST_OUTPUT_MENU_TITLE)
     def read_last_output(self, _sender: object) -> None:
         start_announcement()
+
+    @rumps.clicked("Test voice")
+    def test_voice(self, _sender: object) -> None:
+        start_test_voice()
 
 
 def main() -> None:

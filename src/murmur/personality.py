@@ -91,8 +91,8 @@ def style_summary(facts: str, *, failed: bool) -> str:
 
 def sample_sentence() -> str:
     if get_mode() is Mode.SMOOTH:
-        return "Ooh, this is a short voice check. Murmur is ready to roll, cool cat."
-    return "This is a short voice check. Murmur is ready."
+        return "Ooh, Murmur is ready to roll, cool cat."
+    return "Murmur voice check is ready."
 
 
 def tts_instructions(mode: Mode | str | None = None) -> str:

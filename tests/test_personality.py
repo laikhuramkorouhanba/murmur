@@ -16,6 +16,14 @@ def test_focused_mode_keeps_summary_plain() -> None:
     )
 
 
+def test_test_voice_sample_is_one_sentence_in_each_mode() -> None:
+    personality.set_mode(personality.Mode.SMOOTH)
+    assert personality.sample_sentence() == "Ooh, Murmur is ready to roll, cool cat."
+
+    personality.set_mode(personality.Mode.FOCUSED)
+    assert personality.sample_sentence() == "Murmur voice check is ready."
+
+
 def test_smooth_mode_varies_its_openers_and_keeps_facts_intact() -> None:
     personality.set_mode(personality.Mode.SMOOTH)
     facts = "One test failed in failing check dot py, line 6: it expected 19.8 but got 18."

@@ -163,3 +163,33 @@ def test_hotkey_style_repeat_can_cancel_the_current_job(monkeypatch) -> None:
 
     assert app._JOB_CANCELLED.is_set()
     assert stopped == [True]
+
+
+def test_test_voice_uses_the_selected_mode_and_prints_engine(monkeypatch, capsys) -> None:
+    personality.set_mode(personality.Mode.FOCUSED)
+    spoken = []
+
+    def fake_speak(text, *, mode):
+        spoken.append((text, mode))
+        return "OpenAI"
+
+    monkeypatch.setattr(app.voice, "speak", fake_speak)
+
+    app._run_test_voice_job()
+
+    assert spoken == [("Murmur voice check is ready.", personality.Mode.FOCUSED)]
+    assert capsys.readouterr().out == (
+        "----- Murmur: test voice -----\n"
+        "Murmur voice check is ready.\n"
+        "Voice engine: OpenAI\n"
+        "----- End of Murmur voice test -----\n"
+    )
+
+
+def test_test_voice_menu_action_starts_its_background_job(monkeypatch) -> None:
+    starts = []
+    monkeypatch.setattr(app, "start_test_voice", lambda: starts.append(True))
+
+    app.MurmurApp.test_voice(None, None)
+
+    assert starts == [True]
