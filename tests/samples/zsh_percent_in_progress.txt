@@ -1,0 +1,5 @@
+laikhuram@MacBook-Pro murmur % uv pip install requests
+Downloading requests 100 % done
+Installed 5 packages in 12ms
+ + requests==2.32.3
+laikhuram@MacBook-Pro murmur %

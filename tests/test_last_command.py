@@ -28,3 +28,31 @@ def test_uses_last_200_lines_when_there_is_no_prompt() -> None:
     assert last_command_output(history).splitlines() == [
         f"line {number}" for number in range(50, 250)
     ]
+
+
+def test_percent_sign_in_a_traceback_is_not_a_prompt() -> None:
+    history = (SAMPLES / "zsh_percent_in_traceback.txt").read_text(encoding="utf-8")
+
+    output = last_command_output(history)
+
+    # The whole error must survive, including the file name and line number.
+    assert output.startswith("F ")
+    assert 'msg = "%s failed %s" % name' in output
+    assert "tests/test_greet.py:4:" in output
+    assert "app.py:2: TypeError" in output
+
+
+def test_percent_sign_in_a_progress_line_is_not_a_prompt() -> None:
+    history = (SAMPLES / "zsh_percent_in_progress.txt").read_text(encoding="utf-8")
+
+    assert last_command_output(history) == (
+        "Downloading requests 100 % done\n"
+        "Installed 5 packages in 12ms\n"
+        " + requests==2.32.3"
+    )
+
+
+def test_prompt_with_spaces_in_the_folder_name() -> None:
+    history = "ada@mac My Project % ls\nnotes.txt\nada@mac My Project % "
+
+    assert last_command_output(history) == "notes.txt"

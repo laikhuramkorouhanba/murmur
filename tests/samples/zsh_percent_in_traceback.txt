@@ -1,0 +1,13 @@
+laikhuram@MacBook-Pro murmur % uv run pytest -q
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________________________________ test_greet __________________________________
+    def test_greet():
+>       greet("Ada")
+tests/test_greet.py:4:
+    def greet(name):
+>       msg = "%s failed %s" % name
+E       TypeError: not enough arguments for format string
+app.py:2: TypeError
+1 failed in 0.05s
+laikhuram@MacBook-Pro murmur %

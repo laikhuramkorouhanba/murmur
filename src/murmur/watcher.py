@@ -15,7 +15,9 @@ end tell
 '''
 _NO_WINDOWS = "MURMUR_NO_WINDOWS"
 _TIMEOUT_SECONDS = 5
-_ZSH_PROMPT = re.compile(r"^(?P<prefix>.*?)(?<!\S)%(?P<rest>[ \t]*.*)$")
+# A zsh prompt looks like "user@host folder % " (or just "folder % ").
+# We match that whole shape, so a "%" inside normal output is not mistaken for a prompt.
+_ZSH_PROMPT = re.compile(r"^(?:[\w.+-]+@[\w.-]+ [^%]*|\S+) %(?P<rest>(?:[ \t].*)?)$")
 
 
 def last_command_output(text: str) -> str:
