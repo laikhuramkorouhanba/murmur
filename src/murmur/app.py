@@ -6,12 +6,20 @@ from collections.abc import Callable
 
 from murmur import config, voice
 from murmur.cleaner import clean
-from murmur.decision import Action, contains_error, decide, speech_failure_summary
+from murmur.decision import (
+    Action,
+    AutoAction,
+    auto_action,
+    contains_error,
+    decide,
+    speech_failure_summary,
+)
 from murmur import hotkey, settings, welcome
 from murmur.hotkey import start_hotkey_listener
+from murmur.monitor import AutoAnnouncer, FinishedCommand
 from murmur import personality
 from murmur.summariser import summarise
-from murmur.watcher import get_terminal_text, last_command_output
+from murmur.watcher import get_tab_text, get_terminal_text, last_command_output
 import rumps
 
 
@@ -19,6 +27,7 @@ _JOB_LOCK = threading.Lock()
 _JOB_ACTIVE = False
 _JOB_CANCELLED = threading.Event()
 _HOTKEY_LISTENER = None
+_AUTO_ANNOUNCER: AutoAnnouncer | None = None
 
 
 def read_last_output_title() -> str:
@@ -89,6 +98,46 @@ def announce_last_output(
     engine = voice.speak(spoken_text, mode=personality.get_mode())
     print(f"Voice engine: {engine}")
     print("----- End of Murmur announcement -----")
+
+
+def announce_finished_command(
+    finished: FinishedCommand,
+    cancel_event: threading.Event | None = None,
+    *,
+    read_text: Callable[[], str] | None = None,
+) -> None:
+    """Auto-announce one finished command, following the table in decision.auto_action."""
+    cancelled = cancel_event or threading.Event()
+    reader = read_text or (lambda: get_tab_text(finished.tty))
+    try:
+        history = reader()
+    except RuntimeError as error:
+        print(f"Murmur auto-announce: {error}")
+        return
+
+    cleaned = clean(last_command_output(history))
+    action = auto_action(cleaned, finished.seconds)
+    if action is AutoAction.ANNOUNCE:
+        # Errors get exactly what the hotkey gives, reusing the text we already read.
+        announce_last_output(cancelled, read_text=lambda: history)
+        return
+
+    personality.record_result(False)
+    print(f"----- Murmur: command finished after about {finished.seconds:.0f} s -----")
+    if action is AutoAction.SILENT:
+        print("(quick success; staying silent)")
+        engine = "none (silent)"
+    elif cancelled.is_set():
+        engine = "none (stopped)"
+    elif action is AutoAction.SOFT_SOUND:
+        print("(success; playing the soft sound)")
+        engine = voice.play_soft_sound()
+    else:
+        line = personality.done_line()
+        print(line)
+        engine = voice.speak(line, mode=personality.get_mode())
+    print(f"Voice engine: {engine}")
+    print("----- End of Murmur auto-announce -----")
 
 
 def _run_announcement_job() -> None:
@@ -163,6 +212,37 @@ def start_announcement(*, stop_if_running: bool = False) -> bool:
         "murmur-announcement",
         stop_if_running=stop_if_running,
     )
+
+
+def start_auto_announcement(finished: FinishedCommand) -> bool:
+    """Called by the background checker. Never interrupts Murmur if it is already talking."""
+
+    def job() -> None:
+        global _JOB_ACTIVE
+        try:
+            announce_finished_command(finished, _JOB_CANCELLED)
+        finally:
+            with _JOB_LOCK:
+                _JOB_ACTIVE = False
+
+    started = _start_background_job(job, "murmur-auto-announcement")
+    if not started:
+        print("Auto-announce skipped: Murmur is already speaking.")
+    return started
+
+
+def auto_announce_status() -> str:
+    if settings.get("auto_announce"):
+        return "Murmur auto-announce: on. Murmur speaks up when a Terminal command finishes."
+    return "Murmur auto-announce: off. Turn it on in the Murmur menu."
+
+
+def start_auto_announcer() -> AutoAnnouncer:
+    global _AUTO_ANNOUNCER
+    _AUTO_ANNOUNCER = AutoAnnouncer(start_auto_announcement)
+    _AUTO_ANNOUNCER.start()
+    print(auto_announce_status())
+    return _AUTO_ANNOUNCER
 
 
 def start_test_voice() -> bool:
@@ -246,6 +326,7 @@ class MurmurApp(rumps.App):
         super().__init__("Murmur", quit_button="Quit Murmur")
 
         self.read_item = rumps.MenuItem(read_last_output_title(), callback=self.read_last_output)
+        self.auto_item = rumps.MenuItem("Auto-announce finished commands", callback=self.toggle_auto)
 
         self.personality_menu = rumps.MenuItem("Personality")
         self.personality_items = {}
@@ -281,6 +362,7 @@ class MurmurApp(rumps.App):
         self.menu.update(
             [
                 self.read_item,
+                self.auto_item,
                 None,
                 self.personality_menu,
                 self.voice_menu,
@@ -293,7 +375,19 @@ class MurmurApp(rumps.App):
         self._show_personality_choice()
         self._show_voice_choice()
         self._show_tap_choice()
+        self._show_auto_choice()
         rumps.events.before_start.register(self._label_menu_bar_item)
+
+    def toggle_auto(self, _sender: object) -> None:
+        settings.set("auto_announce", not settings.get("auto_announce"))
+        self._show_auto_choice()
+        print(auto_announce_status())
+
+    def _show_auto_choice(self) -> None:
+        on = bool(settings.get("auto_announce"))
+        # The checkmark shows it visually; the spoken label says "on" or "off" in words.
+        self.auto_item.state = int(on)
+        _speak_label(self.auto_item, f"Auto-announce finished commands, {'on' if on else 'off'}")
 
     def _label_menu_bar_item(self) -> None:
         # The menu bar item itself only exists once the app is starting up.
@@ -382,6 +476,7 @@ def main() -> None:
         print(warning, file=sys.stderr)
     check_terminal_on_startup()
     start_hotkey()
+    start_auto_announcer()
     welcome_if_first_run()
     MurmurApp().run()
 
