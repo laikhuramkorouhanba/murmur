@@ -39,6 +39,13 @@ DOUBLE_TAP_KEYS = {
 }
 DOUBLE_TAP_SECONDS = 0.4
 
+# Fix it (Codex). Low reasoning effort keeps fixes quick on stage.
+FIX_TIMEOUT_SECONDS = 180
+FIX_REASONING_EFFORT = "low"  # Codex accepts none, minimal, low, medium, high, xhigh, max
+FIX_TICK_SECONDS = 10  # a quiet tick this often while Codex works
+FIX_STILL_ON_IT_SECONDS = 30  # after this long, also say one short "still on it" line
+FIX_MAX_ERROR_CHARS = 12000
+
 # Auto-announce: how often we peek at Terminal, and how we treat finished commands.
 AUTO_POLL_SECONDS = 1.0
 AUTO_ERROR_POLL_SECONDS = 5.0  # slower while something is wrong, so errors don't spam
