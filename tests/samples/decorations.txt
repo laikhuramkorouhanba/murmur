@@ -1,0 +1,6 @@
+============================ test session starts ============================
+___________________ test_total_includes_the_tip ___________________
+E       assert 18.0 == 19.8
+============================= short test summary ============================
+FAILED demo/failing_check.py::test_total_includes_the_tip - assert 18.0 == 19.8
+--- a/demo/failing_check.py

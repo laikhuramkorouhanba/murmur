@@ -5,6 +5,8 @@ import re
 
 _ANSI_ESCAPE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
 _TABLE_SEPARATORS = re.compile(r"[│║┃]")
+_DECORATION_ONLY = re.compile(r"^[=_*-]{3,}$")
+_WRAPPED_DECORATION = re.compile(r"^([=_*-])\1{2,}\s*(.*?)\s*\1{3,}$")
 
 
 def _is_box_border(line: str) -> bool:
@@ -34,6 +36,11 @@ def clean(text: str) -> str:
     for line in text.split("\n"):
         # A carriage return redraws the current terminal line from its start.
         line = line.split("\r")[-1].rstrip()
+        if _DECORATION_ONLY.fullmatch(line):
+            continue
+        wrapped = _WRAPPED_DECORATION.fullmatch(line)
+        if wrapped:
+            line = wrapped.group(2)
         if _is_box_border(line):
             continue
         if _TABLE_SEPARATORS.search(line):

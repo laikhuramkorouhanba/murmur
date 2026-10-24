@@ -36,3 +36,14 @@ def test_keeps_error_file_name_and_text_exact() -> None:
 
     assert "demo/failing_check.py:6: AssertionError" in result
     assert "E       assert 18.0 == 19.8" in result
+
+
+def test_cleans_pytest_decoration_lines_but_keeps_inner_text_and_diff_lines() -> None:
+    assert clean(read_sample_bytes("decorations.txt")) == (
+        "test session starts\n"
+        "test_total_includes_the_tip\n"
+        "E       assert 18.0 == 19.8\n"
+        "short test summary\n"
+        "FAILED demo/failing_check.py::test_total_includes_the_tip - assert 18.0 == 19.8\n"
+        "--- a/demo/failing_check.py"
+    )
