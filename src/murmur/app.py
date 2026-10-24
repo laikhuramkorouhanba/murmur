@@ -14,7 +14,7 @@ from murmur.decision import (
     decide,
     speech_failure_summary,
 )
-from murmur import hotkey, settings, welcome
+from murmur import fixer, hotkey, settings, watcher, welcome
 from murmur.hotkey import start_hotkey_listener
 from murmur.monitor import AutoAnnouncer, FinishedCommand
 from murmur import personality
@@ -47,26 +47,58 @@ def print_last_output() -> None:
     print("----- End of Murmur output -----")
 
 
+def _lookup_front_tty() -> str | None:
+    try:
+        snapshot = watcher.tab_snapshot()
+    except RuntimeError:
+        return None
+    return snapshot.tty if snapshot else None
+
+
+def _lookup_folder(tty: str) -> str | None:
+    return watcher.tab_folder(tty)
+
+
+def _remember_result(history: str, cleaned: str, failed: bool, tty: str | None) -> None:
+    """Keep the details of a failure for Fix it, or forget the old one after a success."""
+    if not failed:
+        fixer.forget_failure()
+        return
+    tty = tty or _lookup_front_tty()
+    fixer.remember_failure(
+        fixer.LastFailure(
+            tty=tty,
+            # Look up the folder now, while the shell is still sitting in it.
+            folder=_lookup_folder(tty) if tty else None,
+            command=watcher.last_command_line(history),
+            output=cleaned,
+        )
+    )
+
+
 def announce_last_output(
     cancel_event: threading.Event | None = None,
     *,
     read_text: Callable[[], str] | None = None,
+    tty: str | None = None,
 ) -> None:
     """Read, clean, decide, summarise if needed, and speak on a worker thread."""
     cancelled = cancel_event or threading.Event()
     reader = read_text or get_terminal_text
     print("----- Murmur: cleaned terminal output -----")
     try:
-        cleaned = clean(last_command_output(reader()))
+        history = reader()
     except RuntimeError as error:
         print(error)
         print("Voice engine: none (no speech)")
         print("----- End of Murmur announcement -----")
         return
+    cleaned = clean(last_command_output(history))
 
     print(cleaned or "(No output found for the last command.)")
     failed = contains_error(cleaned)
     personality.record_result(failed)
+    _remember_result(history, cleaned, failed, tty)
     if cancelled.is_set():
         print("Voice engine: none (stopped)")
         print("----- End of Murmur announcement -----")
@@ -119,10 +151,14 @@ def announce_finished_command(
     action = auto_action(cleaned, finished.seconds)
     if action is AutoAction.ANNOUNCE:
         # Errors get exactly what the hotkey gives, reusing the text we already read.
-        announce_last_output(cancelled, read_text=lambda: history)
+        announce_last_output(cancelled, read_text=lambda: history, tty=finished.tty)
         return
 
     personality.record_result(False)
+    if action is not AutoAction.SILENT:
+        # A success Murmur told you about replaces the old failure, so Fix it won't
+        # go back to an error you have already moved past. A silent quick "ls" does not.
+        fixer.forget_failure()
     print(f"----- Murmur: command finished after about {finished.seconds:.0f} s -----")
     if action is AutoAction.SILENT:
         print("(quick success; staying silent)")

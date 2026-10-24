@@ -178,3 +178,45 @@ def test_closed_tab_gives_a_clear_message(monkeypatch) -> None:
 def test_refuses_an_odd_tty_instead_of_putting_it_in_applescript() -> None:
     with pytest.raises(RuntimeError, match="unexpected Terminal tab name"):
         watcher.get_tab_text('/dev/ttys1" & do shell script "rm')
+
+
+def test_last_command_line_is_the_latest_typed_command() -> None:
+    history = "me@mac shop % ls\nfiles\nme@mac shop % pytest -q\n1 failed\nme@mac shop % "
+
+    assert watcher.last_command_line(history) == "pytest -q"
+    assert watcher.last_command_line("no prompt here") is None
+
+
+def test_tab_folder_finds_the_shells_folder(monkeypatch) -> None:
+    def fake_run(command, **_kwargs):
+        if command[0] == "ps":
+            assert command[:3] == ["ps", "-t", "ttys004"]
+            return completed(stdout=" 900 login\n 901 -zsh\n 950 python3\n")
+        assert command == ["lsof", "-a", "-p", "901", "-d", "cwd", "-Fn"]
+        return completed(stdout="p901\nfcwd\nn/Users/ada/shop\n")
+
+    monkeypatch.setattr(watcher.subprocess, "run", fake_run)
+
+    assert watcher.tab_folder("/dev/ttys004") == "/Users/ada/shop"
+
+
+def test_tab_folder_prefers_the_innermost_shell(monkeypatch) -> None:
+    seen = []
+
+    def fake_run(command, **_kwargs):
+        if command[0] == "ps":
+            return completed(stdout=" 900 login\n 901 -zsh\n 920 /bin/bash\n")
+        seen.append(command[3])
+        return completed(stdout="n/tmp/inner\n")
+
+    monkeypatch.setattr(watcher.subprocess, "run", fake_run)
+
+    assert watcher.tab_folder("/dev/ttys004") == "/tmp/inner"
+    assert seen == ["920"]
+
+
+def test_tab_folder_gives_up_quietly(monkeypatch) -> None:
+    monkeypatch.setattr(watcher.subprocess, "run", lambda *a, **k: completed(stdout=" 900 login\n"))
+
+    assert watcher.tab_folder("/dev/ttys004") is None
+    assert watcher.tab_folder("not a tty") is None

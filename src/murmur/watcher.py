@@ -64,6 +64,15 @@ _TIMEOUT_SECONDS = 5
 _ZSH_PROMPT = re.compile(r"^(?:[\w.+-]+@[\w.-]+ [^%]*|\S+) %(?P<rest>(?:[ \t].*)?)$")
 
 
+def last_command_line(text: str) -> str | None:
+    """The command typed at the latest prompt, like "pytest -q", or None if we can't tell."""
+    for line in reversed(text.split("\n")):
+        match = _ZSH_PROMPT.match(line)
+        if match and match.group("rest").strip():
+            return match.group("rest").strip()
+    return None
+
+
 def last_command_output(text: str) -> str:
     """Keep text after the latest recognizable zsh percent prompt."""
     lines = text.split("\n")
@@ -159,6 +168,48 @@ def get_tab_text(tty: str) -> str:
     if result.stdout.strip() == _NO_TAB:
         raise RuntimeError("That Terminal tab was closed before Murmur could read it.")
     return result.stdout
+
+
+_SHELLS = {"zsh", "bash", "fish", "sh"}
+
+
+def tab_folder(tty: str) -> str | None:
+    """Find the folder the shell in this tab is sitting in, like /Users/ada/shop.
+
+    Terminal doesn't tell us this, so we ask macOS instead. This only reads:
+    "ps" lists the programs on the tab's tty, and "lsof" shows the shell's
+    current folder. Nothing is typed into the tab.
+    """
+    if not re.fullmatch(r"/dev/ttys\d+", tty):
+        return None
+    try:
+        listing = subprocess.run(
+            ["ps", "-t", tty.removeprefix("/dev/"), "-o", "pid=,comm="],
+            capture_output=True, text=True, timeout=_TIMEOUT_SECONDS, check=False,
+        ).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+    # The last shell listed is the one you're typing into (it might be a bash inside zsh).
+    shell_pid = None
+    for line in listing.splitlines():
+        pid, _, command = line.strip().partition(" ")
+        if command.strip().rsplit("/", 1)[-1].lstrip("-") in _SHELLS:
+            shell_pid = pid
+    if shell_pid is None:
+        return None
+
+    try:
+        found = subprocess.run(
+            ["lsof", "-a", "-p", shell_pid, "-d", "cwd", "-Fn"],
+            capture_output=True, text=True, timeout=_TIMEOUT_SECONDS, check=False,
+        ).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    for line in found.splitlines():
+        if line.startswith("n/"):
+            return line[1:]
+    return None
 
 
 def get_terminal_text() -> str:
