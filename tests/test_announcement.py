@@ -89,10 +89,11 @@ def test_announcement_summarises_errors_and_speaks_the_summary(monkeypatch, caps
         "E       assert 18.0 == 19.8\n"
         "demo/failing_check.py:6: AssertionError"
     ]
-    assert spoken[0].endswith(
+    assert (
         "One test failed in failing check dot py, line 6: "
-        "it expected 19.8 but got 18. Nothing we can't smooth out."
+        "it expected 19.8 but got 18." in spoken[0]
     )
+    assert any(spoken[0].endswith(closer) for closer in personality._PLAYFUL_CLOSERS)
     assert any(spoken[0].startswith(opener) for opener in personality._PLAYFUL_OPENERS)
     output = capsys.readouterr().out
     assert spoken[0] in output

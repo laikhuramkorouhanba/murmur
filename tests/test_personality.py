@@ -33,7 +33,7 @@ def test_smooth_mode_varies_its_openers_and_keeps_facts_intact() -> None:
 
     assert first != second
     assert facts in first and facts in second
-    assert first.endswith("Nothing we can't smooth out.")
+    assert any(first.endswith(closer) for closer in personality._PLAYFUL_CLOSERS)
 
 
 def test_smooth_becomes_encouraging_after_three_failures() -> None:
@@ -48,7 +48,8 @@ def test_smooth_becomes_encouraging_after_three_failures() -> None:
         "You've got this; let's work through it."
     ) or result.startswith("Let's take a breath and handle one detail at a time.")
     assert "cool cat" not in result
-    assert "Nothing we can't smooth out" not in result
+    assert not any(closer in result for closer in personality._PLAYFUL_CLOSERS)
+    assert any(result.endswith(closer) for closer in personality._ENCOURAGING_CLOSERS)
 
 
 def test_menu_selects_and_marks_the_current_mode() -> None:
@@ -69,3 +70,49 @@ def test_menu_selects_and_marks_the_current_mode() -> None:
     assert personality.get_mode() is personality.Mode.SMOOTH
     assert menu["Smooth"].state == 1
     assert menu["Focused"].state == 0
+
+
+def _split(result: str, openers, closers) -> tuple[str, str]:
+    opener = next(o for o in openers if result.startswith(o))
+    closer = next(c for c in closers if result.endswith(c))
+    return opener, closer
+
+
+def test_smooth_never_repeats_an_opener_or_closer_twice_in_a_row() -> None:
+    personality.set_mode(personality.Mode.SMOOTH)
+    personality.record_result(False)
+    seen_openers, seen_closers = [], []
+
+    for _ in range(60):
+        result = personality.style_summary("One test failed.", failed=True)
+        opener, closer = _split(result, personality._PLAYFUL_OPENERS, personality._PLAYFUL_CLOSERS)
+        seen_openers.append(opener)
+        seen_closers.append(closer)
+        personality.record_result(False)
+
+    assert all(a != b for a, b in zip(seen_closers, seen_closers[1:]))
+    assert all(a != b for a, b in zip(seen_openers, seen_openers[1:]))
+    # Real variety, not just two lines taking turns.
+    assert len(set(seen_closers)) == len(personality._PLAYFUL_CLOSERS)
+    assert len(set(seen_openers)) == len(personality._PLAYFUL_OPENERS)
+
+
+def test_successes_get_a_varied_closer_too() -> None:
+    personality.set_mode(personality.Mode.SMOOTH)
+    closers = []
+    for _ in range(20):
+        result = personality.style_summary("All 12 tests passed.", failed=False)
+        _, closer = _split(result, personality._SUCCESS_OPENERS, personality._SUCCESS_CLOSERS)
+        closers.append(closer)
+
+    assert all(a != b for a, b in zip(closers, closers[1:]))
+
+
+def test_long_summaries_skip_the_closer() -> None:
+    personality.set_mode(personality.Mode.SMOOTH)
+    personality.record_result(False)
+    facts = "Two tests failed. The first is in app dot py, line 3."
+
+    result = personality.style_summary(facts, failed=True)
+
+    assert result.endswith(facts)

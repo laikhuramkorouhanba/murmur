@@ -1,6 +1,7 @@
 """Runtime personality modes for spoken summaries."""
 
 from enum import Enum
+import random
 import re
 import threading
 
@@ -14,6 +15,8 @@ _LOCK = threading.Lock()
 _MODE = Mode.SMOOTH
 _FAILURE_STREAK = 0
 _LAST_OPENER: str | None = None
+_LAST_CLOSER: str | None = None
+_RANDOM = random.Random()
 
 _PLAYFUL_OPENERS = (
     "Ooh, a small hiccup, cool cat.",
@@ -30,6 +33,22 @@ _SUCCESS_OPENERS = (
     "Mmm, nice and tidy.",
     "Alright, looking good.",
     "Ooh, smooth sailing.",
+)
+_PLAYFUL_CLOSERS = (
+    "Nothing we can't smooth out.",
+    "Easy fix, I reckon.",
+    "We'll have it humming again soon.",
+    "Just a small detour.",
+)
+_ENCOURAGING_CLOSERS = (
+    "Steady wins this one.",
+    "Each run gets us closer.",
+    "Take your time; I'm right here.",
+)
+_SUCCESS_CLOSERS = (
+    "Carry on, cool cat.",
+    "All yours.",
+    "Onward.",
 )
 _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
 
@@ -59,11 +78,28 @@ def failure_streak() -> int:
 
 
 def _next_opener(options: tuple[str, ...]) -> str:
+    """Pick a random opener, but never the one we used last time."""
     global _LAST_OPENER
     with _LOCK:
         choices = tuple(option for option in options if option != _LAST_OPENER) or options
-        _LAST_OPENER = choices[0]
+        _LAST_OPENER = _RANDOM.choice(choices)
         return _LAST_OPENER
+
+
+def _next_closer(options: tuple[str, ...]) -> str:
+    """Same idea for the closing line: random, and never the same twice in a row."""
+    global _LAST_CLOSER
+    with _LOCK:
+        choices = tuple(option for option in options if option != _LAST_CLOSER) or options
+        _LAST_CLOSER = _RANDOM.choice(choices)
+        return _LAST_CLOSER
+
+
+def _with_closer(text: str, facts: str, options: tuple[str, ...]) -> str:
+    # Only short summaries get a closer, so longer ones don't get even longer.
+    if len(_SENTENCE_BOUNDARY.split(facts.strip())) > 1:
+        return text
+    return f"{text} {_next_closer(options)}"
 
 
 def style_summary(facts: str, *, failed: bool) -> str:
@@ -74,19 +110,14 @@ def style_summary(facts: str, *, failed: bool) -> str:
 
     if failed and failure_streak() >= 3:
         opener = _next_opener(_ENCOURAGING_OPENERS)
-        return f"{opener} {facts}"
+        return _with_closer(f"{opener} {facts}", facts, _ENCOURAGING_CLOSERS)
 
     if failed:
         opener = _next_opener(_PLAYFUL_OPENERS)
-        flourish = (
-            " Nothing we can't smooth out."
-            if len(_SENTENCE_BOUNDARY.split(facts.strip())) <= 1
-            else ""
-        )
-        return f"{opener} {facts}{flourish}"
+        return _with_closer(f"{opener} {facts}", facts, _PLAYFUL_CLOSERS)
 
     opener = _next_opener(_SUCCESS_OPENERS)
-    return f"{opener} {facts}"
+    return _with_closer(f"{opener} {facts}", facts, _SUCCESS_CLOSERS)
 
 
 def sample_sentence() -> str:
