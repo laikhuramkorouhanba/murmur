@@ -210,37 +210,123 @@ def start_hotkey() -> bool:
         return False
 
 
+def _speak_label(item: rumps.MenuItem, label: str) -> None:
+    """Give a menu item the exact words VoiceOver should say for it.
+
+    The visible title can stay short and use symbols like ⌘. VoiceOver gets
+    plain words instead, so nothing depends on reading a symbol.
+    """
+    try:
+        item._menuitem.setAccessibilityLabel_(label)
+    except AttributeError:
+        pass
+
+
+def _read_last_output_label() -> str:
+    return (
+        "Read last output. Shortcut: "
+        f"{config.HOTKEY_SPOKEN}, or {hotkey.double_tap_label()}."
+    )
+
+
+_PERSONALITY_LABELS = {
+    personality.Mode.SMOOTH: "Smooth: relaxed and a little playful",
+    personality.Mode.FOCUSED: "Focused: short and neutral",
+}
+
+
 class MurmurApp(rumps.App):
-    """Show Murmur in the menu bar and provide a way to quit."""
+    """The Murmur menu bar item and everything in its menu.
+
+    Every item has plain spoken words for VoiceOver, and each submenu's title
+    says the current choice, like "Voice: Marin", so you hear it without opening it.
+    """
 
     def __init__(self) -> None:
-        super().__init__("Murmur", quit_button="Quit")
-        smooth = rumps.MenuItem("Smooth", callback=self.choose_smooth)
-        focused = rumps.MenuItem("Focused", callback=self.choose_focused)
-        smooth.state = 1
-        personality_menu = rumps.MenuItem("Personality")
-        personality_menu.update([smooth, focused])
+        super().__init__("Murmur", quit_button="Quit Murmur")
 
-        # Keep a handle on this item so its label can follow the double-tap choice.
         self.read_item = rumps.MenuItem(read_last_output_title(), callback=self.read_last_output)
 
-        self.tap_items = {}
-        tap_menu = rumps.MenuItem("Double-tap key")
-        for choice, name in config.DOUBLE_TAP_KEYS.items():
-            item = rumps.MenuItem(name, callback=self._tap_chooser(choice))
-            self.tap_items[choice] = item
-            tap_menu.add(item)
+        self.personality_menu = rumps.MenuItem("Personality")
+        self.personality_items = {}
+        for mode in personality.Mode:
+            item = rumps.MenuItem(mode.value, callback=self._personality_chooser(mode))
+            _speak_label(item, _PERSONALITY_LABELS[mode])
+            self.personality_items[mode] = item
+            self.personality_menu.add(item)
 
+        self.voice_menu = rumps.MenuItem("Voice")
         self.voice_items = {}
-        voice_menu = rumps.MenuItem("Voice")
         for choice, name in config.VOICES.items():
             item = rumps.MenuItem(name, callback=self._voice_chooser(choice))
             self.voice_items[choice] = item
-            voice_menu.add(item)
+            self.voice_menu.add(item)
 
-        self.menu.update([self.read_item, personality_menu, voice_menu, tap_menu])
-        self._show_tap_choice()
+        self.tap_menu = rumps.MenuItem("Double-tap key")
+        self.tap_items = {}
+        for choice, name in config.DOUBLE_TAP_KEYS.items():
+            item = rumps.MenuItem(name, callback=self._tap_chooser(choice))
+            _speak_label(item, f"{name}: tap it twice to read the last output")
+            self.tap_items[choice] = item
+            self.tap_menu.add(item)
+
+        self.test_voice_item = rumps.MenuItem("Test voice", callback=self.test_voice)
+        _speak_label(self.test_voice_item, "Test voice: speak a sample sentence")
+        self.welcome_item = rumps.MenuItem("Replay welcome", callback=self.replay_welcome)
+        _speak_label(self.welcome_item, "Replay welcome: hear the shortcuts and permissions again")
+
+        self.menu.update(
+            [
+                self.read_item,
+                None,
+                self.personality_menu,
+                self.voice_menu,
+                self.tap_menu,
+                None,
+                self.test_voice_item,
+                self.welcome_item,
+            ]
+        )
+        self._show_personality_choice()
         self._show_voice_choice()
+        self._show_tap_choice()
+        rumps.events.before_start.register(self._label_menu_bar_item)
+
+    def _label_menu_bar_item(self) -> None:
+        # The menu bar item itself only exists once the app is starting up.
+        try:
+            self._nsapp.nsstatusitem.button().setAccessibilityLabel_(
+                "Murmur, spoken terminal results"
+            )
+        except AttributeError:
+            pass
+
+    @staticmethod
+    def _show_submenu_choice(menu: rumps.MenuItem, heading: str, choice: str) -> None:
+        menu.title = f"{heading}: {choice}"
+        _speak_label(menu, f"{heading}, currently {choice}")
+
+    def _personality_chooser(self, mode: personality.Mode) -> Callable[[object], None]:
+        def choose(_sender: object) -> None:
+            self._choose_personality(mode)
+
+        return choose
+
+    def _choose_personality(self, mode: personality.Mode) -> None:
+        personality.set_mode(mode)
+        self._show_personality_choice()
+
+    def _show_personality_choice(self) -> None:
+        current = personality.get_mode()
+        for mode, item in self.personality_items.items():
+            item.state = int(mode is current)
+        self._show_submenu_choice(self.personality_menu, "Personality", current.value)
+
+    def choose_smooth(self, _sender: object) -> None:
+        self._choose_personality(personality.Mode.SMOOTH)
+
+    def choose_focused(self, _sender: object) -> None:
+        self._choose_personality(personality.Mode.FOCUSED)
 
     def _voice_chooser(self, choice: str) -> Callable[[object], None]:
         def choose(_sender: object) -> None:
@@ -257,6 +343,7 @@ class MurmurApp(rumps.App):
         current = voice.current_voice()
         for choice, item in self.voice_items.items():
             item.state = int(choice == current)
+        self._show_submenu_choice(self.voice_menu, "Voice", config.VOICES[current])
 
     def _tap_chooser(self, choice: str) -> Callable[[object], None]:
         def choose(_sender: object) -> None:
@@ -273,27 +360,16 @@ class MurmurApp(rumps.App):
         current = hotkey.double_tap_choice()
         for choice, item in self.tap_items.items():
             item.state = int(choice == current)
+        self._show_submenu_choice(self.tap_menu, "Double-tap key", config.DOUBLE_TAP_KEYS[current])
         self.read_item.title = read_last_output_title()
-
-    def _choose_personality(self, mode: personality.Mode) -> None:
-        personality.set_mode(mode)
-        self.menu["Personality"]["Smooth"].state = int(mode is personality.Mode.SMOOTH)
-        self.menu["Personality"]["Focused"].state = int(mode is personality.Mode.FOCUSED)
-
-    def choose_smooth(self, _sender: object) -> None:
-        self._choose_personality(personality.Mode.SMOOTH)
-
-    def choose_focused(self, _sender: object) -> None:
-        self._choose_personality(personality.Mode.FOCUSED)
+        _speak_label(self.read_item, _read_last_output_label())
 
     def read_last_output(self, _sender: object) -> None:
         start_announcement()
 
-    @rumps.clicked("Test voice")
     def test_voice(self, _sender: object) -> None:
         start_test_voice()
 
-    @rumps.clicked("Replay welcome")
     def replay_welcome(self, _sender: object) -> None:
         start_welcome()
 

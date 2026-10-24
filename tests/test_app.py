@@ -131,3 +131,38 @@ def test_voice_menu_saves_the_choice_and_marks_it() -> None:
     assert app.voice.current_voice() == "cedar"
     assert menu_app.voice_items["cedar"].state == 1
     assert menu_app.voice_items["marin"].state == 0
+
+
+def spoken(item) -> str:
+    """What VoiceOver will say for this menu item."""
+    return str(item._menuitem.accessibilityLabel())
+
+
+def test_every_menu_item_has_plain_spoken_words() -> None:
+    menu_app = app.MurmurApp()
+
+    assert spoken(menu_app.read_item) == (
+        "Read last output. Shortcut: Command Option Shift M, or Right Command twice."
+    )
+    assert spoken(menu_app.personality_menu) == "Personality, currently Smooth"
+    assert spoken(menu_app.voice_menu) == "Voice, currently Marin"
+    assert spoken(menu_app.tap_menu) == "Double-tap key, currently Right Command"
+    assert spoken(menu_app.test_voice_item) == "Test voice: speak a sample sentence"
+    assert spoken(menu_app.welcome_item) == "Replay welcome: hear the shortcuts and permissions again"
+    assert spoken(menu_app.tap_items["right_shift"]) == "Right Shift: tap it twice to read the last output"
+    assert menu_app.quit_button.title == "Quit Murmur"
+
+
+def test_submenu_titles_show_the_current_choice_and_follow_changes() -> None:
+    menu_app = app.MurmurApp()
+    assert menu_app.voice_menu.title == "Voice: Marin"
+
+    menu_app.choose_voice("cedar")
+    menu_app.choose_double_tap("right_option")
+    menu_app.choose_focused(None)
+
+    assert menu_app.voice_menu.title == "Voice: Cedar"
+    assert menu_app.tap_menu.title == "Double-tap key: Right Option"
+    assert menu_app.personality_menu.title == "Personality: Focused"
+    assert spoken(menu_app.read_item).endswith("or Right Option twice.")
+    app.personality.set_mode(app.personality.Mode.SMOOTH)
