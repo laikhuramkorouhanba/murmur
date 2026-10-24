@@ -4,6 +4,23 @@ import re
 
 
 _ANSI_ESCAPE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
+_TABLE_SEPARATORS = re.compile(r"[│║┃]")
+
+
+def _is_box_border(line: str) -> bool:
+    """Tell apart a table border from a row with real text."""
+    visible = [char for char in line if not char.isspace()]
+    return bool(visible) and all("\u2500" <= char <= "\u257f" for char in visible)
+
+
+def _clean_table_row(line: str) -> str:
+    """Turn one vertical table row into text with simple separators."""
+    cells = [cell.strip() for cell in _TABLE_SEPARATORS.split(line)]
+    while cells and not cells[0]:
+        cells.pop(0)
+    while cells and not cells[-1]:
+        cells.pop()
+    return " | ".join(cells)
 
 
 def clean(text: str) -> str:
@@ -17,6 +34,10 @@ def clean(text: str) -> str:
     for line in text.split("\n"):
         # A carriage return redraws the current terminal line from its start.
         line = line.split("\r")[-1].rstrip()
+        if _is_box_border(line):
+            continue
+        if _TABLE_SEPARATORS.search(line):
+            line = _clean_table_row(line)
         is_blank = not line
         if is_blank and previous_was_blank:
             continue
