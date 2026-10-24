@@ -18,6 +18,7 @@ _JOB_LOCK = threading.Lock()
 _JOB_ACTIVE = False
 _JOB_CANCELLED = threading.Event()
 _HOTKEY_LISTENER = None
+READ_LAST_OUTPUT_MENU_TITLE = f"Read last output ({config.HOTKEY_LABEL})"
 
 
 def print_last_output() -> None:
@@ -123,14 +124,23 @@ def check_terminal_on_startup() -> None:
         print(f"Murmur startup warning: {error}", file=sys.stderr)
 
 
-def start_hotkey() -> None:
+def start_hotkey() -> bool:
     global _HOTKEY_LISTENER
     try:
         _HOTKEY_LISTENER = start_hotkey_listener(
             lambda: start_announcement(stop_if_running=True)
         )
+        print(
+            f"Murmur hotkey: {config.HOTKEY_LABEL} starts announcements; "
+            "press it again to stop speech."
+        )
+        return True
     except Exception as error:
-        print(f"Murmur startup warning: {error}", file=sys.stderr)
+        print(
+            f"Murmur startup warning: hotkey {config.HOTKEY_LABEL} is unavailable. {error}",
+            file=sys.stderr,
+        )
+        return False
 
 
 class MurmurApp(rumps.App):
@@ -156,7 +166,7 @@ class MurmurApp(rumps.App):
     def choose_focused(self, _sender: object) -> None:
         self._choose_personality(personality.Mode.FOCUSED)
 
-    @rumps.clicked("Read last output")
+    @rumps.clicked(READ_LAST_OUTPUT_MENU_TITLE)
     def read_last_output(self, _sender: object) -> None:
         start_announcement()
 

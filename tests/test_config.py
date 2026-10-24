@@ -10,6 +10,7 @@ def test_model_voice_speed_hotkey_and_limits_are_centralized() -> None:
     assert config.VOICE == "marin"
     assert config.SPEECH_SPEED == 1.0
     assert config.HOTKEY == "<cmd>+<alt>+<shift>+m"
+    assert config.HOTKEY_LABEL == "⌘⌥⇧M"
     assert config.SYSTEM_VOICE_RATE == 230
 
 

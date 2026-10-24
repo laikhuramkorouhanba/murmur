@@ -79,5 +79,20 @@ def test_hotkey_permission_problem_is_a_startup_warning(monkeypatch, capsys) -> 
     app.start_hotkey()
 
     assert capsys.readouterr().err == (
-        "Murmur startup warning: Enable Input Monitoring and Accessibility.\n"
+        "Murmur startup warning: hotkey ⌘⌥⇧M is unavailable. "
+        "Enable Input Monitoring and Accessibility.\n"
     )
+
+
+def test_successful_hotkey_startup_prints_the_shortcut(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(app, "start_hotkey_listener", lambda _callback: object())
+
+    assert app.start_hotkey()
+
+    assert capsys.readouterr().out == (
+        "Murmur hotkey: ⌘⌥⇧M starts announcements; press it again to stop speech.\n"
+    )
+
+
+def test_menu_title_displays_the_global_shortcut() -> None:
+    assert app.READ_LAST_OUTPUT_MENU_TITLE == "Read last output (⌘⌥⇧M)"

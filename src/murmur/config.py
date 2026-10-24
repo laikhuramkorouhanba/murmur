@@ -24,6 +24,7 @@ FIRST_AUDIO_TIMEOUT_SECONDS = 5
 SYSTEM_VOICE_RATE = 230
 
 HOTKEY = "<cmd>+<alt>+<shift>+m"
+HOTKEY_LABEL = "⌘⌥⇧M"
 
 
 def startup_warnings(api_key: str | None = OPENAI_API_KEY) -> list[str]:
