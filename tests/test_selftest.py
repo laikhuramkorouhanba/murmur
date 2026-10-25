@@ -13,7 +13,10 @@ def test_default_is_muted_and_options_reach_the_run(monkeypatch) -> None:
     selftest.main([])
     selftest.main(["--speak", "--no-codex"])
 
-    assert calls == [{"no_codex": False, "muted": True}, {"no_codex": True, "muted": False}]
+    assert calls == [
+        {"no_codex": False, "muted": True, "demo_mode": False},
+        {"no_codex": True, "muted": False, "demo_mode": False},
+    ]
 
 
 def test_exit_code_is_zero_only_when_every_step_passes() -> None:
@@ -57,3 +60,21 @@ def test_a_prompt_is_only_finished_when_it_is_empty() -> None:
     assert selftest._ends_with_empty_prompt("(murmur) ada@mac shop % pytest\n1 passed\n(murmur) ada@mac shop % ")
     assert not selftest._ends_with_empty_prompt("(murmur) ada@mac shop % pytest")
     assert not selftest._ends_with_empty_prompt("collecting ...")
+
+
+def test_demo_rehearsal_puts_the_settings_file_back_exactly(monkeypatch) -> None:
+    from murmur import settings
+
+    settings.PATH.write_text('{\n  "voice": "cedar"\n}\n')
+    before = settings.PATH.read_bytes()
+
+    def fake_step(name, action):
+        raise RuntimeError("stop after the settings were changed")
+
+    monkeypatch.setattr(selftest.demo, "load_recording", lambda: {"codex": {"summary": ""}})
+    try:
+        selftest.demo_steps(fake_step, selftest.Recorder())
+    except RuntimeError:
+        pass
+
+    assert settings.PATH.read_bytes() == before

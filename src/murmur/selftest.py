@@ -3,6 +3,7 @@
     uv run python -m murmur.selftest              # quiet (same as --muted)
     uv run python -m murmur.selftest --speak      # play the audio so you can listen
     uv run python -m murmur.selftest --no-codex   # apply a known patch instead of calling Codex
+    uv run python -m murmur.selftest --demo-mode  # also rehearse Demo mode offline
 
 It opens its own new Terminal window and only ever talks to that tab, found by
 its tty. Your own windows are never typed into, read, or closed. Then it:
@@ -25,7 +26,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from murmur import app, fixer, monitor, personality, voice, watcher
+from murmur import app, demo, fixer, monitor, personality, prerender, settings, voice, watcher
 from murmur.watcher import TabSnapshot
 
 REPO = Path(__file__).resolve().parents[2]
@@ -272,7 +273,7 @@ class Tee(io.TextIOBase):
         return "".join(self.text)
 
 
-def run(no_codex: bool, muted: bool) -> int:
+def run(no_codex: bool, muted: bool, demo_mode: bool = False) -> int:
     out = sys.__stdout__
     say = lambda message: print(message, file=out, flush=True)  # noqa: E731
 
@@ -429,10 +430,119 @@ def run(no_codex: bool, muted: bool) -> int:
                 current.fail("the test should fail again after Undo")
 
         step("Rerun test: fails again", rerun_fails)
+
+        if demo_mode:
+            demo_steps(step, recorder)
     finally:
         sys.stdout, sys.stderr = sys.__stdout__, sys.__stderr__
         log.close()
     return finish(steps, tab, out)
+
+
+class Offline:
+    """While active, any OpenAI speech request fails as if the Wi-Fi were off."""
+
+    def __enter__(self):
+        self._real = voice._openai_client
+
+        def no_network():
+            raise ConnectionError("offline rehearsal: no network")
+
+        voice._openai_client = no_network
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        voice._openai_client = self._real
+
+
+def demo_steps(step: Callable, recorder: "Recorder") -> None:
+    """--demo-mode: rehearse Demo mode offline, then Undo, Reset, and the fallback order."""
+    # Keep your settings file exactly as it was, even keys you never set.
+    saved_file = settings.PATH.read_bytes() if settings.PATH.exists() else None
+    # Pre-rendering covers Marin in Smooth, so rehearse with those; your choices come back after.
+    settings.set("personality", personality.Mode.SMOOTH.value)
+    settings.set("voice", prerender.VOICE)
+    recording = demo.load_recording()
+    try:
+        def demo_mode(current: Step) -> None:
+            settings.set("captions", False)
+            with Offline():
+                if not app.start_demo_mode():
+                    current.fail("Demo mode didn't start (Murmur was busy)")
+                    return
+                time.sleep(0.3)
+                wait_for_job(90)
+            spoken = recorder.since(current.mark)
+            texts = [report.text for report in spoken]
+            live = [report for report in spoken if report.engine != "pre-rendered"]
+            if live:
+                current.fail(f"{len(live)} line(s) weren't pre-rendered: {live[0].engine}: {live[0].text[:50]}")
+            if not texts or texts[0] != demo.INTRO_LINE:
+                current.fail("it didn't start by saying it is a replay")
+            if not any("expected 21.60 but got 18.40" in text for text in texts):
+                current.fail("the recorded failure wasn't announced")
+            if not any(recording["codex"]["summary"] in text for text in texts):
+                current.fail("the recorded fix summary wasn't spoken")
+            if not settings.get("captions"):
+                current.fail("captions weren't switched on")
+            if demo.BUGGY_LINE in (demo.DEMO_DIR / "shop.py").read_text(encoding="utf-8"):
+                current.fail("the recorded fix wasn't applied")
+            last = fixer.last_fix()
+            if last is None or last.files != ["shop.py"]:
+                current.fail("Undo wouldn't know about the demo fix")
+            current.note = "offline: every OpenAI request was blocked"
+
+        step("Demo mode (offline)", demo_mode)
+
+        def undo_demo(current: Step) -> None:
+            with Offline():
+                app.start_undo()
+                time.sleep(0.3)
+                wait_for_job(30)
+            if not demo.demo_project_ready():
+                current.fail("the demo project didn't go back to its bug")
+            if any(r.engine != "pre-rendered" for r in recorder.since(current.mark)):
+                current.fail("Undo's line wasn't pre-rendered")
+
+        step("Undo demo fix (offline)", undo_demo)
+
+        def reset(current: Step) -> None:
+            (demo.DEMO_DIR / "shop.py").write_text("changed by the self-test\n", encoding="utf-8")
+            with Offline():
+                app.start_reset_demo()
+                time.sleep(0.3)
+                wait_for_job(60)
+            texts = [r.text for r in recorder.since(current.mark)]
+            if demo.RESET_LINE not in texts:
+                current.fail("Reset didn't say the bug is back")
+            if not demo.demo_project_ready():
+                current.fail("the demo project isn't back to its starting state")
+            if fixer.last_failure() is not None or fixer.last_fix() is not None:
+                current.fail("Murmur still remembers the old failure or fix")
+
+        step("Reset demo project", reset)
+
+        def fallback(current: Step) -> None:
+            # Hide one recording: with no file and no network, the Mac voice must take over.
+            line = demo.RESET_LINE
+            path = prerender.path_for(line)
+            hidden = path.with_suffix(".hidden")
+            path.rename(hidden)
+            try:
+                with Offline():
+                    engine = voice.speak(line, mode=personality.Mode.SMOOTH)
+            finally:
+                hidden.rename(path)
+            if engine != "macOS say":
+                current.fail(f"expected the Mac voice, got {engine}")
+            current.note = "file hidden + network off: pre-rendered → OpenAI → macOS say"
+
+        step("Fallback order", fallback)
+    finally:
+        if saved_file is None:
+            settings.PATH.unlink(missing_ok=True)
+        else:
+            settings.PATH.write_bytes(saved_file)
 
 
 def finish(steps: list[Step], tab: "TestTab | None", out) -> int:
@@ -458,8 +568,11 @@ def main(argv: list[str] | None = None) -> int:
     sound.add_argument("--muted", action="store_true", help="no audio played; speech is still requested and timed (default)")
     sound.add_argument("--speak", action="store_true", help="play the audio so you can listen")
     parser.add_argument("--no-codex", action="store_true", help="apply a known patch instead of calling Codex")
+    parser.add_argument(
+        "--demo-mode", action="store_true", help="also rehearse Demo mode offline, Undo, Reset, and the fallback order"
+    )
     options = parser.parse_args(argv)
-    return run(no_codex=options.no_codex, muted=not options.speak)
+    return run(no_codex=options.no_codex, muted=not options.speak, demo_mode=options.demo_mode)
 
 
 if __name__ == "__main__":
