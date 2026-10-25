@@ -1,5 +1,7 @@
 import inspect
 
+import pytest
+
 import sounddevice
 
 from murmur import config, voice
@@ -142,7 +144,6 @@ def test_streams_openai_audio_using_marin_and_configured_speed(monkeypatch) -> N
     assert speech_create.arguments["speed"] == 1.0
     assert "late-night radio host" in speech_create.arguments["instructions"]
     assert speech_create.arguments["response_format"] == "pcm"
-    assert speech_create.arguments["timeout"] == 5
     assert output_streams[0].chunks == [b"\x00\x00\x01\x00"]
     assert output_streams[0].closed
     assert fake_response.closed
@@ -191,27 +192,94 @@ def test_no_audio_falls_back_to_macos_say(monkeypatch) -> None:
     assert commands == [["say", "-r", "180", "No audio arrived."]]
 
 
-def test_audio_late_past_five_seconds_falls_back_to_macos_say(monkeypatch) -> None:
+def test_audio_that_arrives_slowly_is_still_played(monkeypatch, capsys) -> None:
+    # It used to be thrown away after 5 s, and then `say` started from scratch: even slower.
     voice.reset_stop()
     monkeypatch.setattr(config, "OPENAI_API_KEY", "test-key")
-    times = iter((0.0, 5.1))
+    times = iter((0.0, 3.4))
     monkeypatch.setattr(voice.time, "monotonic", lambda: next(times))
-    commands: list[list[str]] = []
-
-    class FakeProcess:
-        def wait(self):
-            return 0
-
-    monkeypatch.setattr(
-        voice.subprocess,
-        "Popen",
-        lambda command, **_kwargs: (commands.append(command) or FakeProcess()),
-    )
+    stream = FakeOutputStream(samplerate=24000, channels=1, dtype="int16")
+    monkeypatch.setattr(voice.sounddevice, "RawOutputStream", lambda **_kwargs: stream)
     client = FakeClient(FakeSpeechCreate(FakeStreamingResponse([b"\x00\x00"])))
 
-    assert voice.speak("Late audio.", client=client) == "macOS say"
+    assert voice.speak("Late audio.", client=client) == "OpenAI"
 
-    assert commands == [["say", "-r", "180", "Late audio."]]
+    assert stream.chunks == [b"\x00\x00"]
+    assert "Murmur voice: first audio after 3.4 s" in capsys.readouterr().out
+
+
+class BreaksPartway(FakeStreamingResponse):
+    def iter_bytes(self, chunk_size: int):
+        yield b"\x01\x02"
+        raise TimeoutError("the network went quiet")
+
+
+def test_a_line_cut_off_partway_is_not_read_again_by_say(monkeypatch, capsys) -> None:
+    voice.reset_stop()
+    monkeypatch.setattr(config, "OPENAI_API_KEY", "test-key")
+    stream = FakeOutputStream(samplerate=24000, channels=1, dtype="int16")
+    monkeypatch.setattr(voice.sounddevice, "RawOutputStream", lambda **_kwargs: stream)
+    monkeypatch.setattr(voice.subprocess, "Popen", lambda *a, **k: pytest.fail("say should not repeat the line"))
+    client = FakeClient(FakeSpeechCreate(BreaksPartway([])))
+
+    assert voice.speak("Half a line.", client=client) == "OpenAI"
+
+    assert stream.chunks == [b"\x01\x02"] and stream.closed
+    assert "stopped partway (TimeoutError: the network went quiet); not repeating the line" in capsys.readouterr().out
+
+
+def test_speech_request_uses_the_short_connect_and_first_audio_timeouts(monkeypatch) -> None:
+    voice.reset_stop()
+    monkeypatch.setattr(config, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(voice.sounddevice, "RawOutputStream", lambda **kwargs: FakeOutputStream(**kwargs))
+    speech_create = FakeSpeechCreate(FakeStreamingResponse([b"\x00\x00"]))
+
+    voice.speak("Hello.", client=FakeClient(speech_create))
+
+    timeout = speech_create.arguments["timeout"]
+    assert timeout.connect == config.TTS_CONNECT_TIMEOUT_SECONDS == 2.0
+    assert timeout.read == config.FIRST_AUDIO_TIMEOUT_SECONDS == 3.5
+
+
+def test_one_openai_client_is_shared_and_never_retries(monkeypatch) -> None:
+    monkeypatch.setattr(config, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(voice, "_CLIENT", None)
+
+    first = voice._openai_client()
+
+    assert voice._openai_client() is first
+    assert first.max_retries == 0
+
+
+def test_warm_up_failure_is_a_gentle_note(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(config, "OPENAI_API_KEY", "test-key")
+
+    class Offline:
+        class models:
+            @staticmethod
+            def retrieve(_model):
+                raise OSError("no route to host")
+
+    class RunNow:
+        def __init__(self, *, target, name, daemon):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(voice, "_openai_client", lambda: Offline)
+    monkeypatch.setattr(voice.threading, "Thread", RunNow)
+
+    voice.warm_up()
+
+    assert "couldn't reach OpenAI (OSError: no route to host)" in capsys.readouterr().out
+
+
+def test_warm_up_does_nothing_without_a_key(monkeypatch) -> None:
+    monkeypatch.setattr(config, "OPENAI_API_KEY", None)
+    monkeypatch.setattr(voice, "_openai_client", lambda: pytest.fail("should not connect"))
+
+    voice.warm_up()
 
 
 def test_audio_device_failure_falls_back_to_macos_say(monkeypatch) -> None:

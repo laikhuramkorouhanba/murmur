@@ -19,6 +19,8 @@ _STOP_EVENT = threading.Event()
 _STATE_LOCK = threading.Lock()
 _ACTIVE_PROCESS: subprocess.Popen[bytes] | None = None
 _ACTIVE_STREAM: Any | None = None
+_CLIENT: Any | None = None
+_CLIENT_LOCK = threading.Lock()
 _SECRET_LIKE = re.compile(r"sk-[A-Za-z0-9_\-*.]+")
 
 
@@ -38,6 +40,59 @@ def current_voice() -> str:
     """The voice picked in the menu, or Marin if the saved one is unknown."""
     chosen = settings.get("voice")
     return chosen if chosen in config.VOICES else config.VOICE
+
+
+def _tts_timeout() -> Any:
+    from openai import Timeout
+
+    # connect: reaching OpenAI at all. The rest: waiting for each piece of audio.
+    return Timeout(config.FIRST_AUDIO_TIMEOUT_SECONDS, connect=config.TTS_CONNECT_TIMEOUT_SECONDS)
+
+
+def _openai_client() -> Any:
+    """One shared OpenAI client, so every line reuses the open connection.
+
+    Making a new client for each line meant a fresh secure handshake every time,
+    which is slow. We also turn off automatic retries: a retry after a timeout
+    only makes the silence longer, and `say` is ready to take over straight away.
+    """
+    global _CLIENT
+    with _CLIENT_LOCK:
+        if _CLIENT is None:
+            from openai import DefaultHttpxClient, OpenAI
+
+            try:
+                # openai's own HTTP library (already installed with it). Lets an idle
+                # connection stay open for a couple of minutes instead of 5 seconds.
+                from httpx2 import Limits
+
+                http_client = DefaultHttpxClient(limits=Limits(keepalive_expiry=config.TTS_KEEPALIVE_SECONDS))
+            except ImportError:
+                http_client = None
+            _CLIENT = OpenAI(
+                api_key=config.OPENAI_API_KEY,
+                timeout=_tts_timeout(),
+                max_retries=0,
+                http_client=http_client,
+            )
+        return _CLIENT
+
+
+def warm_up() -> None:
+    """Open the connection to OpenAI in the background at startup, so the first line starts sooner."""
+    if not config.OPENAI_API_KEY:
+        return
+
+    def connect() -> None:
+        try:
+            _openai_client().models.retrieve(config.TTS_MODEL)
+        except Exception as error:
+            print(
+                f"Murmur startup note: couldn't reach OpenAI ({_explain(error)}). "
+                "Speech will use the Mac voice until it can."
+            )
+
+    threading.Thread(target=connect, name="murmur-voice-warm-up", daemon=True).start()
 
 
 def reset_stop() -> None:
@@ -172,7 +227,7 @@ def _stream_openai_speech(
         instructions=personality.tts_instructions(mode),
         speed=config.SPEECH_SPEED,
         response_format="pcm",
-        timeout=config.FIRST_AUDIO_TIMEOUT_SECONDS,
+        timeout=_tts_timeout(),
     )
 
     try:
@@ -183,8 +238,9 @@ def _stream_openai_speech(
                 if not chunk:
                     continue
                 if not got_audio:
-                    if time.monotonic() - requested_at > config.FIRST_AUDIO_TIMEOUT_SECONDS:
-                        raise TimeoutError("No speech audio arrived within five seconds.")
+                    # If it got here, it arrived in time (the timeout above stops slow waits).
+                    # So we always play it: throwing it away only made the silence longer.
+                    print(f"Murmur voice: first audio after {time.monotonic() - requested_at:.1f} s")
                     output = sounddevice.RawOutputStream(
                         samplerate=24000,
                         channels=1,
@@ -199,6 +255,14 @@ def _stream_openai_speech(
                 leftover = chunk[cut:]
                 if cut:
                     output.write(chunk[:cut])
+    except Exception as error:
+        if not got_audio:
+            raise  # nothing played yet, so `say` can read the whole line instead
+        # Part of the line already played. Reading it all again with `say` would be
+        # more confusing than a short cut, so we stop here and say why in the log.
+        print(f"Murmur: OpenAI speech stopped partway ({_explain(error)}); not repeating the line.")
+        return not _STOP_EVENT.is_set()
+    else:
         if not got_audio and not _STOP_EVENT.is_set():
             raise TimeoutError("OpenAI returned no speech audio.")
         return not _STOP_EVENT.is_set()
@@ -225,12 +289,7 @@ def speak(
 
     try:
         if client is None:
-            from openai import OpenAI
-
-            client = OpenAI(
-                api_key=config.OPENAI_API_KEY,
-                timeout=config.TTS_TIMEOUT_SECONDS,
-            )
+            client = _openai_client()
         if _stream_openai_speech(text, client, mode):
             return "OpenAI"
         if _STOP_EVENT.is_set():

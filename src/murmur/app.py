@@ -633,6 +633,7 @@ class MurmurApp(rumps.App):
 def main() -> None:
     for warning in config.startup_warnings():
         print(warning, file=sys.stderr)
+    voice.warm_up()  # open the OpenAI connection now, so the first line starts sooner
     check_terminal_on_startup()
     check_codex_on_startup()
     start_hotkey()
