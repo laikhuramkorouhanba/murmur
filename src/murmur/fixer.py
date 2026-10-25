@@ -231,6 +231,22 @@ def codex_command(root: Path, schema_file: Path, answer_file: Path, prompt: str)
     ]
 
 
+def codex_environment() -> dict[str, str]:
+    """The environment Codex runs in: ours, plus a uv cache it is allowed to write.
+
+    The sandbox only lets Codex write inside the project and the temp folder, and
+    uv refuses to start when it can't write its cache in your home folder. So
+    Codex could never re-run a uv test to check its fix (found while recording the
+    demo). Pointing uv's cache at the temp folder, and turning off uv's syncing
+    (the network is off anyway), lets it re-run the test like you would.
+    """
+    return {
+        **os.environ,
+        "UV_CACHE_DIR": str(Path(tempfile.gettempdir()) / "murmur-uv-cache"),
+        "UV_NO_SYNC": "1",
+    }
+
+
 def _stop_process(process: subprocess.Popen) -> None:
     """Stop Codex and anything it started (it runs in its own process group)."""
     try:
@@ -275,6 +291,7 @@ def run_codex(
                     stderr=subprocess.STDOUT,
                     text=True,
                     start_new_session=True,  # own process group, so cancel stops all of it
+                    env=codex_environment(),
                 )
             except OSError as error:
                 raise FixRefused(f"Codex could not start: {error}")
@@ -392,9 +409,12 @@ def _file_list(paths: list[str]) -> str:
     return text
 
 
-def spoken_fix_summary(files: list[str], answer: CodexAnswer) -> str:
-    """What Murmur says after a fix: opener, files, Codex's sentence, and how to undo."""
-    parts = [personality.fix_line("fixed")]
+def spoken_fix_summary(files: list[str], answer: CodexAnswer, opener: str | None = None) -> str:
+    """What Murmur says after a fix: opener, files, Codex's sentence, and how to undo.
+
+    opener is normally picked at random; pre-rendering passes each one in turn.
+    """
+    parts = [opener or personality.fix_line("fixed")]
     # Codex's sentence often names the file already; then saying "Changed shop.py." too is an echo.
     if not all(Path(path).name in answer.summary for path in files):
         parts.append(f"Changed {_file_list(files)}.")

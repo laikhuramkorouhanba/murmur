@@ -35,8 +35,9 @@ def test_the_codex_command_is_sandboxed_quiet_and_quick(tmp_path: Path) -> None:
 class FakeProcess:
     """Pretends to be Codex: finishes after a few polls and writes an answer file."""
 
-    def __init__(self, command, *, polls=2, returncode=0, answer=None, **_kwargs):
+    def __init__(self, command, *, polls=2, returncode=0, answer=None, env=None, **_kwargs):
         self.command = command
+        self.env = env
         self.pid = 4242
         self.polls_left = polls
         self.returncode = None
@@ -142,3 +143,16 @@ def test_codex_ready_explains_missing_or_logged_out(monkeypatch) -> None:
         fixer.subprocess, "run", lambda *a, **k: fixer.subprocess.CompletedProcess(a, 0, "Logged in", "")
     )
     assert fixer.codex_ready() is None
+
+
+def test_codex_gets_a_uv_cache_it_may_write(monkeypatch, tmp_path) -> None:
+    # Found while recording the demo: inside the sandbox uv couldn't open ~/.cache/uv,
+    # so Codex could never re-run a uv test to check its own fix.
+    made, _, cancel = install(monkeypatch, answer={"fixed": True, "summary": "Fixed.", "verified": True})
+
+    fixer.run_codex(FAILURE, tmp_path, cancel)
+
+    env = made[0].env
+    assert env["UV_CACHE_DIR"].startswith(fixer.tempfile.gettempdir())
+    assert env["UV_NO_SYNC"] == "1"
+    assert env["PATH"] == fixer.os.environ["PATH"]  # everything else is passed through
