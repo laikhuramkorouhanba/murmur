@@ -39,10 +39,11 @@ def test_welcome_greets_and_explains_both_shortcuts_without_unneeded_permissions
     assert "Tap Right Command twice" in text
     assert "twice twice" not in text
     assert "Repeat either shortcut to stop speech" in text
+    assert "Command Option Shift F fixes errors with Codex." in text
     assert "Automation" not in text
     assert "Accessibility" not in text
     assert "Input Monitoring" not in text
-    assert len(text.split()) <= 30
+    assert len(text.split()) <= 34
     assert "cool cat" not in text
 
 
@@ -71,7 +72,7 @@ def test_welcome_gives_separate_advice_for_missing_automation_and_keyboard_acces
 
     assert "Missing Automation: allow Terminal to control Terminal" in text
     assert "Missing Accessibility and Input Monitoring" in text
-    assert len(text.split()) <= 55
+    assert len(text.split()) <= 64
 
 
 def test_welcome_checks_only_permissions_macos_reports_as_missing(monkeypatch) -> None:

@@ -1,7 +1,9 @@
 """Murmur's small macOS menu bar app."""
 
+import subprocess
 import sys
 import threading
+import time
 from collections.abc import Callable
 
 from murmur import config, voice
@@ -25,6 +27,7 @@ import rumps
 
 _JOB_LOCK = threading.Lock()
 _JOB_ACTIVE = False
+_JOB_NAME: str | None = None  # which job is running, like "murmur-fix"
 _JOB_CANCELLED = threading.Event()
 _HOTKEY_LISTENER = None
 _AUTO_ANNOUNCER: AutoAnnouncer | None = None
@@ -226,7 +229,7 @@ def _start_background_job(
     *,
     stop_if_running: bool = False,
 ) -> bool:
-    global _JOB_ACTIVE
+    global _JOB_ACTIVE, _JOB_NAME
     with _JOB_LOCK:
         if _JOB_ACTIVE:
             if stop_if_running:
@@ -235,6 +238,7 @@ def _start_background_job(
             return False
 
         _JOB_ACTIVE = True
+        _JOB_NAME = name
         _JOB_CANCELLED.clear()
         voice.reset_stop()
         threading.Thread(target=target, name=name, daemon=True).start()
@@ -290,16 +294,65 @@ def _run_fix_job() -> None:
             _JOB_ACTIVE = False
 
 
-def start_fix() -> bool:
-    """Ask Codex to fix the last failure in the background.
+def _start_fix_when_free() -> None:
+    # Wait a moment for the speech we just stopped to wind down, then start the fix.
+    for _ in range(50):
+        with _JOB_LOCK:
+            free = not _JOB_ACTIVE
+        if free:
+            break
+        time.sleep(0.1)
+    if not _start_background_job(_run_fix_job, "murmur-fix"):
+        print("Fix it skipped: Murmur is still busy. Try again in a second.")
 
-    It shares the job lock, so pressing a Murmur shortcut while Codex works
-    cancels the fix (and puts back anything it half-changed).
+
+def start_fix() -> bool:
+    """Ask Codex to fix the last failure in the background (the menu item and ⌘⌥⇧F).
+
+    - If Murmur is talking (say, still reading the error), it stops talking and starts the fix.
+    - If a fix is already running, this cancels it, like every other shortcut does.
     """
-    started = _start_background_job(_run_fix_job, "murmur-fix")
-    if not started:
-        print("Fix it skipped: Murmur is busy. Press a shortcut to stop it first.")
-    return started
+    with _JOB_LOCK:
+        running = _JOB_NAME if _JOB_ACTIVE else None
+    if running == "murmur-fix":
+        print("Fix it: cancelling the fix. Anything Codex half-changed will be put back.")
+        _start_background_job(_run_fix_job, "murmur-fix", stop_if_running=True)
+        return False
+    if running is not None:
+        _start_background_job(_run_fix_job, "murmur-fix", stop_if_running=True)  # stops the talking
+        threading.Thread(target=_start_fix_when_free, name="murmur-fix-waiter", daemon=True).start()
+        return True
+    return _start_background_job(_run_fix_job, "murmur-fix")
+
+
+def _run_undo_job() -> None:
+    global _JOB_ACTIVE
+    try:
+        fixer.undo_last_fix()
+    finally:
+        with _JOB_LOCK:
+            _JOB_ACTIVE = False
+
+
+def start_undo() -> bool:
+    """Undo the last fix in the background, so speaking the result never freezes the menu."""
+    return _start_background_job(_run_undo_job, "murmur-undo")
+
+
+def open_last_fix_diff() -> bool:
+    """Open the last fix's exact change in TextEdit, which VoiceOver reads well."""
+    if not fixer.DIFF_PATH.exists():
+        print("Murmur: there's no fix diff to open yet.")
+        return False
+    subprocess.run(["open", "-e", str(fixer.DIFF_PATH)], check=False)
+    return True
+
+
+def check_codex_on_startup() -> None:
+    """Say up front if Fix it can't work yet, instead of surprising you later."""
+    problem = fixer.codex_ready()
+    if problem:
+        print(f"Murmur startup warning: Fix it ({config.FIX_HOTKEY_LABEL}) is unavailable. {problem}", file=sys.stderr)
 
 
 def start_test_voice() -> bool:
@@ -331,17 +384,19 @@ def start_hotkey() -> bool:
     global _HOTKEY_LISTENER
     try:
         _HOTKEY_LISTENER = start_hotkey_listener(
-            lambda: start_announcement(stop_if_running=True)
+            lambda: start_announcement(stop_if_running=True),
+            on_fix=start_fix,
         )
         print(
             f"Murmur hotkey: {hotkey.shortcuts_label()} starts announcements; "
-            "press either again to stop speech."
+            "press either again to stop speech. "
+            f"{config.FIX_HOTKEY_LABEL} asks Codex to fix the last error."
         )
         return True
     except Exception as error:
         print(
-            f"Murmur startup warning: hotkeys {config.HOTKEY_LABEL} and "
-            f"{hotkey.double_tap_label()} are unavailable. {error}",
+            f"Murmur startup warning: hotkeys {config.HOTKEY_LABEL}, "
+            f"{hotkey.double_tap_label()} and {config.FIX_HOTKEY_LABEL} are unavailable. {error}",
             file=sys.stderr,
         )
         return False
@@ -408,6 +463,11 @@ class MurmurApp(rumps.App):
             self.tap_items[choice] = item
             self.tap_menu.add(item)
 
+        # Fix it. These three dim themselves when there's nothing for them to do.
+        self.fix_item = rumps.MenuItem(f"Fix last error ({config.FIX_HOTKEY_LABEL})")
+        self.undo_item = rumps.MenuItem("Undo last fix")
+        self.diff_item = rumps.MenuItem("Open last fix diff")
+
         self.test_voice_item = rumps.MenuItem("Test voice", callback=self.test_voice)
         _speak_label(self.test_voice_item, "Test voice: speak a sample sentence")
         self.welcome_item = rumps.MenuItem("Replay welcome", callback=self.replay_welcome)
@@ -421,6 +481,10 @@ class MurmurApp(rumps.App):
                 self.read_item,
                 self.auto_item,
                 None,
+                self.fix_item,
+                self.undo_item,
+                self.diff_item,
+                None,
                 self.personality_menu,
                 self.voice_menu,
                 self.tap_menu,
@@ -433,7 +497,45 @@ class MurmurApp(rumps.App):
         self._show_voice_choice()
         self._show_tap_choice()
         self._show_auto_choice()
+        self.show_fix_choices()
         rumps.events.before_start.register(self._label_menu_bar_item)
+        # Fixes finish in the background, so check once a second whether to dim or light these up.
+        self._fix_timer = rumps.Timer(lambda _timer: self.show_fix_choices(), 1)
+        rumps.events.before_start.register(self._fix_timer.start)
+
+    @staticmethod
+    def _offer(item: rumps.MenuItem, callback, available: bool, label: str, why_not: str) -> None:
+        # No callback means macOS dims the item. VoiceOver says "dimmed" itself; we add why.
+        item.set_callback(callback if available else None)
+        _speak_label(item, label if available else f"{label}. Unavailable: {why_not}")
+
+    def show_fix_choices(self) -> None:
+        self._offer(
+            self.fix_item,
+            self.fix_last_error,
+            fixer.last_failure() is not None,
+            f"Fix last error with Codex. Shortcut: {config.FIX_HOTKEY_SPOKEN}",
+            "no failed command to fix",
+        )
+        self._offer(
+            self.undo_item, self.undo_last_fix, fixer.last_fix() is not None, "Undo last fix", "no fix to undo"
+        )
+        self._offer(
+            self.diff_item,
+            self.open_last_fix_diff,
+            fixer.DIFF_PATH.exists(),
+            "Open last fix diff in TextEdit",
+            "Codex hasn't made a fix yet",
+        )
+
+    def fix_last_error(self, _sender: object) -> None:
+        start_fix()
+
+    def undo_last_fix(self, _sender: object) -> None:
+        start_undo()
+
+    def open_last_fix_diff(self, _sender: object) -> None:
+        open_last_fix_diff()
 
     def toggle_auto(self, _sender: object) -> None:
         settings.set("auto_announce", not settings.get("auto_announce"))
@@ -532,6 +634,7 @@ def main() -> None:
     for warning in config.startup_warnings():
         print(warning, file=sys.stderr)
     check_terminal_on_startup()
+    check_codex_on_startup()
     start_hotkey()
     start_auto_announcer()
     welcome_if_first_run()

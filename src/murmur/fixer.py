@@ -394,7 +394,11 @@ def _file_list(paths: list[str]) -> str:
 
 def spoken_fix_summary(files: list[str], answer: CodexAnswer) -> str:
     """What Murmur says after a fix: opener, files, Codex's sentence, and how to undo."""
-    parts = [personality.fix_line("fixed"), f"Changed {_file_list(files)}.", answer.summary]
+    parts = [personality.fix_line("fixed")]
+    # Codex's sentence often names the file already; then saying "Changed shop.py." too is an echo.
+    if not all(Path(path).name in answer.summary for path in files):
+        parts.append(f"Changed {_file_list(files)}.")
+    parts.append(answer.summary)
     if answer.verified:
         parts.append("The command passes now.")
     parts.append("Undo last fix is in the Murmur menu.")
@@ -484,3 +488,27 @@ def _fix(cancel, say, tick, runner, ready) -> LastFix | None:
     forget_failure()  # it's fixed now; don't let Fix it go after the same error twice
     say(spoken_fix_summary(files, answer))
     return fix
+
+
+def undo_last_fix(say: Callable[[str], None] = _say) -> bool:
+    """Put the project back the way it was before the last fix. True if it worked."""
+    fix = last_fix()
+    if fix is None:
+        say("There's no fix to undo.")
+        return False
+    print("----- Murmur: Undo last fix -----")
+    try:
+        restored = undo(fix.root, fix.before, fix.after)
+    except FixRefused as error:
+        print(f"(not undone: {error})")
+        print("----- End of Murmur undo -----")
+        say(str(error))
+        return False
+    remember_fix(None)  # one undo per fix
+    print(f"Put back: {', '.join(restored) or '(nothing had changed)'}")
+    print("----- End of Murmur undo -----")
+    if len(fix.files) == 1:
+        say(f"Undone. {_file_list(fix.files)} is back how it was.")
+    else:
+        say(f"Undone. {_file_list(fix.files)} are back how they were.")
+    return True

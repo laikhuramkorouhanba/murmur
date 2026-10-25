@@ -32,7 +32,8 @@ def welcome_text(
 
     shortcuts = (
         f"Tap {tap} for results. Backup: {config.HOTKEY_SPOKEN}. "
-        "Repeat either shortcut to stop speech."
+        "Repeat either shortcut to stop speech. "
+        f"{config.FIX_HOTKEY_SPOKEN} fixes errors with Codex."
     )
     permission_notes = []
     if "Automation" in missing:

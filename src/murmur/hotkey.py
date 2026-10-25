@@ -3,6 +3,8 @@
 There are two ways in:
 - ⌘⌥⇧M (Command + Option + Shift + M)
 - tapping one right-hand modifier key twice, quickly (Right Command by default)
+
+And one more: ⌘⌥⇧F asks Codex to fix the last error.
 """
 
 import ctypes
@@ -60,8 +62,10 @@ class ShortcutWatcher:
         clock: Callable[[], float] = time.monotonic,
         on_first_event: Callable[[], None] | None = None,
         tap_choice: Callable[[], str] = double_tap_choice,
+        on_fix: Callable[[], None] | None = None,
     ) -> None:
         self._on_activate = on_activate
+        self._on_fix = on_fix
         self._keyboard = keyboard
         self._tap_choice = tap_choice
         self._clock = clock
@@ -103,8 +107,13 @@ class ShortcutWatcher:
             self._held.add(name)
             return
 
-        if getattr(key, "vk", None) == config.HOTKEY_KEY_CODE and self._held == {"cmd", "alt", "shift"}:
+        if self._held != {"cmd", "alt", "shift"}:
+            return
+        code = getattr(key, "vk", None)
+        if code == config.HOTKEY_KEY_CODE:
             self._on_activate()
+        elif code == config.FIX_KEY_CODE and self._on_fix is not None:
+            self._on_fix()
 
     def release(self, key: Any) -> None:
         name = self._modifier_names.get(key)
@@ -181,8 +190,10 @@ def missing_permissions() -> list[str]:
     return missing
 
 
-def start_hotkey_listener(on_activate: Callable[[], None]) -> Any:
-    """Start both shortcuts, or explain exactly which permission is missing."""
+def start_hotkey_listener(
+    on_activate: Callable[[], None], on_fix: Callable[[], None] | None = None
+) -> Any:
+    """Start the shortcuts, or explain exactly which permission is missing."""
     missing = missing_permissions()
     if missing:
         app = launching_app_name()
@@ -196,6 +207,7 @@ def start_hotkey_listener(on_activate: Callable[[], None]) -> Any:
     watcher = ShortcutWatcher(
         keyboard,
         on_activate,
+        on_fix=on_fix,
         on_first_event=lambda: print("Murmur hotkey: key events are arriving. Shortcuts are live."),
     )
     listener = keyboard.Listener(on_press=watcher.press, on_release=watcher.release)
