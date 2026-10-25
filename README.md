@@ -47,6 +47,14 @@ brew install codex
 codex login
 ```
 
+### Build Murmur.app
+
+```sh
+./build_app.sh
+```
+
+This makes `dist/Murmur.app` with PyInstaller. It runs without a terminal, lives only in the menu bar (no Dock icon), and writes its log to `~/Library/Logs/Murmur/murmur.log` (**Show log** in the menu). The first time it starts without a key, it asks for your OpenAI API key and keeps it in the macOS Keychain; change it later with **Set OpenAI API key…**. The app never reads `.env`. It is not signed or notarized, so the first time, right-click it and choose **Open**. macOS asks for permissions for Murmur itself, and after each rebuild you may need to turn Murmur off and on again under Accessibility and Input Monitoring.
+
 ## Hotkeys
 
 - **⌘⌥⇧M** reads the latest Terminal output. Press it again to stop speech.
