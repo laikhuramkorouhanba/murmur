@@ -155,7 +155,17 @@ class Recorder:
 
     def __init__(self) -> None:
         self.reports: list[voice.SpeechReport] = []
+        self.started: list[tuple[float, str]] = []  # when each line began, from voice.on_speech
         self._lock = threading.Lock()
+
+    def heard_start(self, text: str | None) -> None:
+        if text is not None:
+            with self._lock:
+                self.started.append((time.monotonic(), text))
+
+    def first_start_after(self, moment: float, containing: str) -> float | None:
+        with self._lock:
+            return next((when for when, text in self.started if when >= moment and containing in text), None)
 
     def __call__(self, report: voice.SpeechReport) -> None:
         with self._lock:
@@ -272,6 +282,7 @@ def run(no_codex: bool, muted: bool) -> int:
     voice.set_muted(muted)
     recorder = Recorder()
     voice.on_spoken(recorder)
+    voice.on_speech(recorder.heard_start)
     scratch = Path(tempfile.mkdtemp(prefix="murmur-selftest-"))
     fixer.DIFF_PATH = scratch / "last_fix.diff"  # keep your real "last fix" files untouched
     fixer.LOG_PATH = scratch / "last_fix_codex.log"
@@ -339,8 +350,9 @@ def run(no_codex: bool, muted: bool) -> int:
             sent = time.monotonic()
             tab.send(f'cd "{DEMO}" && {TEST_COMMAND}')
             heard = wait_until(lambda: any("expected" in r.text for r in recorder.since(current.mark)), timeout=45)
-            if heard:
-                current.note = f"spoke {time.monotonic() - sent:.1f} s after the test was started"
+            began = recorder.first_start_after(sent, "expected")
+            if heard and began is not None:
+                current.note = f"started speaking {began - sent:.1f} s after the test was started"
             wait_for_job(30)
             stop.set()
             watcher_thread.join(timeout=5)
