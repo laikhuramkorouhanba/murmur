@@ -2,7 +2,7 @@
 
 An accessible macOS menu bar companion that turns terminal output into one spoken sentence and helps fix errors with Codex.
 
-Demo video: (link coming)
+Demo video: [Watch on Vimeo](https://vimeo.com/1239318759)
 
 Screen reader users hear terminal output one line at a time: every progress bar, every colour code, every line of a long stack trace. Usually only one line matters, and it’s buried at the bottom. Murmur listens to the terminal for them. When a command finishes, it says what happened in one short sentence, with the exact file, line and cause. If something broke, one shortcut asks Codex to fix it, and another undoes the fix.
 
