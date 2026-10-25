@@ -94,14 +94,14 @@ def test_successful_hotkey_startup_prints_the_shortcut(monkeypatch, capsys) -> N
     assert app.start_hotkey()
 
     assert capsys.readouterr().out == (
-        "Murmur hotkey: ⌘⌥⇧M or Right Command twice starts announcements; "
-        "press either again to stop speech. ⌘⌥⇧F asks Codex to fix the last error. "
-        "⌘⌥⇧R reads the full output word for word. Control stops speech.\n"
+        "Murmur keys: double tap Right Command, then Space repeats, R reads all, F fixes, U undoes, "
+        "Escape cancels. Backups: ⌘⌥⇧M reads the last output, ⌘⌥⇧F fixes the last error with Codex, "
+        "⌘⌥⇧R reads the full output. Control stops speech.\n"
     )
 
 
 def test_menu_title_displays_the_global_shortcut() -> None:
-    assert app.read_last_output_title() == "Read last output (⌘⌥⇧M or Right Command twice)"
+    assert app.read_last_output_title() == "Read last output (⌘⌥⇧M)"
 
 
 def test_menu_registers_shortcut_label_and_test_voice_item() -> None:
@@ -122,7 +122,7 @@ def test_double_tap_menu_saves_the_choice_and_updates_the_label() -> None:
     assert app.settings.get("double_tap_key") == "right_shift"
     assert menu_app.tap_items["right_shift"].state == 1
     assert menu_app.tap_items["right_command"].state == 0
-    assert menu_app.read_item.title == "Read last output (⌘⌥⇧M or Right Shift twice)"
+    assert menu_app.read_item.title == "Read last output (⌘⌥⇧M)"
 
 
 def test_voice_menu_saves_the_choice_and_marks_it() -> None:
@@ -173,7 +173,7 @@ def test_every_menu_item_has_plain_spoken_words() -> None:
     menu_app = app.MurmurApp()
 
     assert spoken(menu_app.read_item) == (
-        "Read last output. Shortcut: Command Option Shift M, or Right Command twice."
+        "Read last output. Shortcut: Command Option Shift M, or double tap Right Command then Space."
     )
     assert spoken(menu_app.personality_menu) == "Style, currently Brief"
     assert spoken(menu_app.voice_menu) == "Voice, currently Mac voice"
@@ -189,7 +189,7 @@ def test_every_menu_item_has_plain_spoken_words() -> None:
     assert spoken(menu_app.welcome_item) == (
         "Replay welcome: hear the shortcuts and missing permission help again"
     )
-    assert spoken(menu_app.tap_items["right_shift"]) == "Right Shift: tap it twice to read the last output"
+    assert spoken(menu_app.tap_items["right_shift"]) == "Right Shift: double tap it for the Murmur keys"
     assert menu_app.quit_button.title == "Quit Murmur"
 
 
@@ -204,7 +204,7 @@ def test_submenu_titles_show_the_current_choice_and_follow_changes() -> None:
     assert menu_app.voice_menu.title == "Voice: Natural voice: Cedar"
     assert menu_app.tap_menu.title == "Double-tap key: Right Option"
     assert menu_app.personality_menu.title == "Style: Friendly"
-    assert spoken(menu_app.read_item).endswith("or Right Option twice.")
+    assert spoken(menu_app.read_item).endswith("or double tap Right Option then Space.")
     app.personality.set_mode(app.personality.Mode.BRIEF)
 
 

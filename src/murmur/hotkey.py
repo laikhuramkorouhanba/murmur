@@ -1,16 +1,22 @@
-"""Global keyboard shortcuts for starting or stopping an announcement.
+"""Global keyboard shortcuts.
 
-There are two ways in:
-- ⌘⌥⇧M (Command + Option + Shift + M)
-- tapping one right-hand modifier key twice, quickly (Right Command by default)
+- Double tap one right-hand modifier key (Right Command by default): Murmur says
+  "Murmur" and listens for one key for about 3 seconds. Space repeats, R reads the
+  full output, F fixes, U undoes, Escape cancels. That key never reaches Terminal.
+- Backups: ⌘⌥⇧M reads the last output, ⌘⌥⇧F fixes, ⌘⌥⇧R reads the full output.
+- Control on its own stops speech, like VoiceOver.
 
-And two more: ⌘⌥⇧F asks Codex to fix the last error, and ⌘⌥⇧R reads the
-full output word for word. Pressing Control on its own stops speech, like VoiceOver.
+How the key is kept from Terminal: macOS lets an app put an "event tap" in front of
+the keyboard. Murmur's normal tap only listens. A second tap, which can swallow
+keys, is made once at startup but stays switched off; it's switched on only while
+the layer waits for its key. So the rest of the time, your typing never waits for
+Murmur, and a slow moment in Murmur can never hold up your keyboard.
 """
 
 import ctypes
 import os
 import subprocess
+import threading
 import time
 from collections.abc import Callable
 from typing import Any
@@ -38,8 +44,140 @@ def double_tap_label() -> str:
 
 
 def shortcuts_label() -> str:
-    """Both shortcuts in one short phrase for menus and messages."""
-    return f"{config.HOTKEY_LABEL} or {double_tap_label()}"
+    """The shortcuts for reading the last output, in one short phrase for messages."""
+    return f"{config.HOTKEY_LABEL}, or {double_tap_label()} then Space"
+
+
+class KeyLayer:
+    """The Murmur key layer: after a double tap, the next key is a Murmur command.
+
+    key_down and key_up return True when the key belongs to Murmur and must be
+    swallowed. Any other key closes the layer and goes through as normal, so you
+    can never get stuck in it. With no key for KEY_LAYER_SECONDS, it closes by itself.
+    """
+
+    def __init__(
+        self,
+        on_command: Callable[[str], None],
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        seconds: float = config.KEY_LAYER_SECONDS,
+        on_change: Callable[[bool], None] | None = None,
+    ) -> None:
+        self._on_command = on_command
+        self._clock = clock
+        self._seconds = seconds
+        self._on_change = on_change
+        self._lock = threading.Lock()
+        self._until: float | None = None
+        self._held: set[int] = set()  # Murmur keys still down, whose key-up we must swallow too
+
+    def open(self) -> None:
+        with self._lock:
+            self._until = self._clock() + self._seconds
+        self._changed()
+        # When the time is up, check again, so the swallowing tap goes off even if no key comes.
+        timer = threading.Timer(self._seconds + 0.05, self._changed)
+        timer.daemon = True
+        timer.start()
+
+    def close(self) -> None:
+        with self._lock:
+            self._until = None
+        self._changed()
+
+    def is_open(self) -> bool:
+        with self._lock:
+            return self._open_now()
+
+    def _open_now(self) -> bool:
+        if self._until is not None and self._clock() > self._until:
+            self._until = None  # timed out
+        return self._until is not None
+
+    def needs_swallowing(self) -> bool:
+        """True while the swallowing tap must stay on: the layer is open, or a Murmur key is still down."""
+        with self._lock:
+            return self._open_now() or bool(self._held)
+
+    def key_down(self, code: int) -> bool:
+        with self._lock:
+            if code in self._held:
+                return True  # the key is held down and repeating: keep it from Terminal too
+            if not self._open_now():
+                return False
+            self._until = None  # one key per double tap
+            command = config.KEY_LAYER_KEYS.get(code)
+            if command is not None:
+                self._held.add(code)
+        if command is not None:
+            self._on_command(command)
+        self._changed()
+        return command is not None
+
+    def key_up(self, code: int) -> bool:
+        with self._lock:
+            swallowed = code in self._held
+            self._held.discard(code)
+        self._changed()
+        return swallowed
+
+    def _changed(self) -> None:
+        if self._on_change is not None:
+            self._on_change(self.needs_swallowing())
+
+
+class KeySwallower:
+    """The tap that keeps the layer's key from Terminal. Off unless the layer needs it."""
+
+    def __init__(self, layer: KeyLayer) -> None:
+        import Quartz  # comes with pynput on macOS
+
+        self._quartz = Quartz
+        self._layer = layer
+        self._wanted = False
+        mask = Quartz.CGEventMaskBit(Quartz.kCGEventKeyDown) | Quartz.CGEventMaskBit(Quartz.kCGEventKeyUp)
+        self._tap = Quartz.CGEventTapCreate(
+            Quartz.kCGSessionEventTap,
+            Quartz.kCGHeadInsertEventTap,
+            Quartz.kCGEventTapOptionDefault,  # may swallow keys (needs Accessibility)
+            mask,
+            self._handle,
+            None,
+        )
+        if self._tap is None:
+            raise RuntimeError("macOS didn't allow a key tap that can keep keys from Terminal.")
+        Quartz.CGEventTapEnable(self._tap, False)  # off until a double tap
+        ready = threading.Event()
+        threading.Thread(target=self._run, args=(ready,), name="murmur-key-layer", daemon=True).start()
+        ready.wait(2)
+
+    def _run(self, ready: threading.Event) -> None:
+        quartz = self._quartz
+        source = quartz.CFMachPortCreateRunLoopSource(None, self._tap, 0)
+        quartz.CFRunLoopAddSource(quartz.CFRunLoopGetCurrent(), source, quartz.kCFRunLoopDefaultMode)
+        ready.set()
+        quartz.CFRunLoopRun()
+
+    def set_enabled(self, on: bool) -> None:
+        self._wanted = on
+        self._quartz.CGEventTapEnable(self._tap, on)
+
+    def _handle(self, _proxy, event_type, event, _refcon):
+        quartz = self._quartz
+        if event_type == quartz.kCGEventTapDisabledByTimeout:
+            # macOS switches a tap off if it ever answers too slowly. Switch it back on if needed.
+            if self._wanted:
+                quartz.CGEventTapEnable(self._tap, True)
+            return event
+        if event_type not in (quartz.kCGEventKeyDown, quartz.kCGEventKeyUp):
+            return event
+        code = quartz.CGEventGetIntegerValueField(event, quartz.kCGKeyboardEventKeycode)
+        if event_type == quartz.kCGEventKeyDown:
+            swallow = self._layer.key_down(code)
+        else:
+            swallow = self._layer.key_up(code)
+        return None if swallow else event
 
 
 def _load_keyboard():
@@ -66,9 +204,12 @@ class ShortcutWatcher:
         on_fix: Callable[[], None] | None = None,
         on_read: Callable[[], None] | None = None,
         on_stop: Callable[[], None] | None = None,
+        on_double_tap: Callable[[], None] | None = None,
     ) -> None:
         self._on_activate = on_activate
         self._on_stop = on_stop
+        # The double tap opens the Murmur key layer. Without one, it reads the last output.
+        self._on_double_tap = on_double_tap or on_activate
         self._on_fix = on_fix
         self._on_read = on_read
         self._keyboard = keyboard
@@ -137,7 +278,7 @@ class ShortcutWatcher:
         now = self._clock()
         if self._last_tap_end is not None and now - self._last_tap_end <= config.DOUBLE_TAP_SECONDS:
             self._last_tap_end = None
-            self._on_activate()
+            self._on_double_tap()
         else:
             self._last_tap_end = now
 
@@ -207,8 +348,15 @@ def start_hotkey_listener(
     on_fix: Callable[[], None] | None = None,
     on_read: Callable[[], None] | None = None,
     on_stop: Callable[[], None] | None = None,
+    on_layer_open: Callable[[], None] | None = None,
+    on_layer_command: Callable[[str], None] | None = None,
 ) -> Any:
-    """Start the shortcuts, or explain exactly which permission is missing."""
+    """Start the shortcuts, or explain exactly which permission is missing.
+
+    With on_layer_open and on_layer_command, the double tap opens the Murmur key
+    layer. If macOS won't allow the key-swallowing tap, the double tap reads the
+    last output instead (the old way), and a startup warning says why.
+    """
     missing = missing_permissions()
     if missing:
         app = launching_app_name()
@@ -219,12 +367,27 @@ def start_hotkey_listener(
         )
 
     keyboard = _load_keyboard()
+    on_double_tap = None
+    if on_layer_open is not None and on_layer_command is not None:
+        try:
+            swallower: KeySwallower | None = None
+            layer = KeyLayer(on_layer_command, on_change=lambda on: swallower and swallower.set_enabled(on))
+            swallower = KeySwallower(layer)
+
+            def on_double_tap() -> None:
+                layer.open()
+                on_layer_open()
+
+        except Exception as error:
+            print(f"Murmur startup warning: the Murmur key layer is off ({error}). "
+                  "Double tap reads the last output instead.")
     watcher = ShortcutWatcher(
         keyboard,
         on_activate,
         on_fix=on_fix,
         on_read=on_read,
         on_stop=on_stop,
+        on_double_tap=on_double_tap,
         on_first_event=lambda: print("Murmur hotkey: key events are arriving. Shortcuts are live."),
     )
     listener = keyboard.Listener(on_press=watcher.press, on_release=watcher.release)

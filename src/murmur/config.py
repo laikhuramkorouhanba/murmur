@@ -95,6 +95,17 @@ DOUBLE_TAP_KEYS = {
 }
 DOUBLE_TAP_SECONDS = 0.4
 
+# The Murmur key layer: double tap, Murmur says "Murmur", then one of these keys
+# (matched by physical key code). The key is swallowed, so Terminal never sees it.
+KEY_LAYER_SECONDS = 3.0  # with no key by then, the layer closes by itself
+KEY_LAYER_KEYS = {
+    49: "repeat",  # Space: say the last announcement again
+    15: "read",  # R: read the full output word for word
+    3: "fix",  # F: fix the last error with Codex
+    32: "undo",  # U: undo the last fix
+    53: "cancel",  # Escape: close the layer and stop speech
+}
+
 # Fix it (Codex). Low reasoning effort keeps fixes quick on stage.
 FIX_TIMEOUT_SECONDS = 180
 FIX_REASONING_EFFORT = "low"  # Codex accepts none, minimal, low, medium, high, xhigh, max

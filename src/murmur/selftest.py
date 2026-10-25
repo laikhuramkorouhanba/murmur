@@ -451,6 +451,8 @@ def run(no_codex: bool, muted: bool, demo_mode: bool = False) -> int:
 
         step("Auto-announce short output (ls)", short_output)
 
+        step("Key layer swallows its key", key_layer_check)
+
         if demo_mode:
             demo_steps(step, recorder)
     finally:
@@ -461,6 +463,75 @@ def run(no_codex: bool, muted: bool, demo_mode: bool = False) -> int:
         else:
             settings.PATH.write_bytes(saved_settings)
     return finish(steps, tab, out)
+
+
+def key_layer_check(current: Step) -> None:
+    """The real key-swallowing tap, tested with F19 and F18: keys that do nothing in your apps.
+
+    A second, listen-only tap behind it plays Terminal: it must never see F19 while
+    the layer is open, and must see F18 (not a layer key) as normal.
+    """
+    import Quartz
+
+    from murmur import hotkey
+
+    f18, f19 = 79, 80
+    commands, behind = [], []
+
+    def listen(_proxy, event_type, event, _refcon):
+        if event_type == Quartz.kCGEventKeyDown:
+            behind.append(Quartz.CGEventGetIntegerValueField(event, Quartz.kCGKeyboardEventKeycode))
+        return event
+
+    real_keys = hotkey.config.KEY_LAYER_KEYS
+    hotkey.config.KEY_LAYER_KEYS = {f19: "test"}
+    loops = []
+    try:
+        swallower = None
+        layer = hotkey.KeyLayer(commands.append, on_change=lambda on: swallower and swallower.set_enabled(on))
+        swallower = hotkey.KeySwallower(layer)
+        mask = Quartz.CGEventMaskBit(Quartz.kCGEventKeyDown)
+        tail = Quartz.CGEventTapCreate(
+            Quartz.kCGSessionEventTap, Quartz.kCGTailAppendEventTap, Quartz.kCGEventTapOptionListenOnly, mask, listen, None
+        )
+
+        def run_tail() -> None:
+            source = Quartz.CFMachPortCreateRunLoopSource(None, tail, 0)
+            loops.append(Quartz.CFRunLoopGetCurrent())
+            Quartz.CFRunLoopAddSource(loops[-1], source, Quartz.kCFRunLoopDefaultMode)
+            Quartz.CFRunLoopRun()
+
+        threading.Thread(target=run_tail, daemon=True).start()
+        time.sleep(0.3)
+
+        def press(code: int) -> None:
+            for down in (True, False):
+                Quartz.CGEventPost(Quartz.kCGHIDEventTap, Quartz.CGEventCreateKeyboardEvent(None, code, down))
+            time.sleep(0.2)
+
+        press(f19)  # layer closed: F19 must pass through untouched
+        passed_when_closed = f19 in behind
+        behind.clear()
+        layer.open()
+        started = time.monotonic()
+        press(f19)  # layer open: swallowed, and the command runs
+        swallow_seconds = time.monotonic() - started
+        press(f18)  # not a layer key: passes through
+        if not passed_when_closed:
+            current.fail("with the layer closed, a key was still held back")
+        if f19 in behind:
+            current.fail("the layer's key reached the app behind it")
+        if commands != ["test"]:
+            current.fail(f"the layer command didn't run once (ran: {commands})")
+        if f18 not in behind:
+            current.fail("a key that isn't a layer key was held back")
+        if layer.needs_swallowing():
+            current.fail("the swallowing tap stayed on after the key")
+        current.note = f"F19 swallowed, F18 passed, tap off again ({swallow_seconds:.2f} s)"
+    finally:
+        hotkey.config.KEY_LAYER_KEYS = real_keys
+        for loop in loops:
+            Quartz.CFRunLoopStop(loop)
 
 
 class Announcing:

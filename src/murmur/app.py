@@ -43,7 +43,7 @@ _AUTO_ANNOUNCER: AutoAnnouncer | None = None
 
 def read_last_output_title() -> str:
     """Menu label that always shows the shortcuts that work right now."""
-    return f"Read last output ({hotkey.shortcuts_label()})"
+    return f"Read last output ({config.HOTKEY_LABEL})"
 
 
 def print_last_output() -> None:
@@ -115,13 +115,17 @@ def failure_words(cleaned: str) -> str:
 
 def speak_output(cleaned: str, cancelled: threading.Event) -> str:
     """Read output word for word (paths spelled out clearly), in pieces so a stop works quickly."""
+    words = readout.speakable(cleaned)
+    _remember_spoken(words)
+    return _speak_in_pieces(words, cancelled, personality.Mode.BRIEF)
+
+
+def _speak_in_pieces(text: str, cancelled: threading.Event, mode: personality.Mode) -> str:
     engine = "none (stopped)"
-    for piece in readout.pieces(readout.speakable(cleaned)):
+    for piece in readout.pieces(text):
         if cancelled.is_set():
             return "none (stopped)"
-        # Always Brief: no openers, no jokes, just the words.
-        engine = voice.speak(piece, mode=personality.Mode.BRIEF)
-        _remember_spoken(piece)
+        engine = voice.speak(piece, mode=mode)
     return engine
 
 
@@ -654,6 +658,75 @@ def check_terminal_on_startup() -> None:
         print(f"Murmur startup warning: {error}", file=sys.stderr)
 
 
+def open_key_layer() -> None:
+    """The double tap: stop talking, say "Murmur", and wait for one key (the hotkey file does the waiting)."""
+    threading.Thread(target=_say_murmur, name="murmur-key-layer-cue", daemon=True).start()
+
+
+def _say_murmur() -> None:
+    stop_talking()
+    # An announcement we just stopped needs a moment to wind down before we can speak again.
+    for _ in range(10):
+        with _JOB_LOCK:
+            busy = _JOB_ACTIVE and _JOB_NAME != "murmur-fix"
+        if not busy:
+            break
+        time.sleep(0.05)
+    with _JOB_LOCK:
+        if not _JOB_ACTIVE:
+            voice.reset_stop()
+    voice.speak(LAYER_CUE, mode=personality.Mode.BRIEF)
+
+
+LAYER_CUE = "Murmur"
+
+
+def run_layer_command(command: str) -> None:
+    """One key after the double tap: "repeat", "read", "fix", "undo" or "cancel"."""
+    print(f"Murmur keys: {command}")
+    if command == "cancel":
+        stop_talking()
+    elif command == "repeat":
+        start_repeat()
+    elif command == "read":
+        start_read_full(stop_if_running=True)
+    elif command == "fix":
+        start_fix()
+    elif command == "undo":
+        if not start_undo():
+            print("Undo skipped: Murmur is busy. Try again in a second.")
+
+
+def _run_repeat_job() -> None:
+    global _JOB_ACTIVE
+    try:
+        text = last_spoken()
+        if text is None:
+            announce_last_output(_JOB_CANCELLED)  # nothing said yet: read the last output
+        else:
+            print(f"----- Murmur: repeat -----\n{text}")
+            _speak_in_pieces(text, _JOB_CANCELLED, personality.get_mode())
+    finally:
+        with _JOB_LOCK:
+            _JOB_ACTIVE = False
+
+
+def start_repeat() -> bool:
+    """Say the last announcement again (Space in the Murmur key layer)."""
+    return _start_background_job(_run_repeat_job, "murmur-repeat", stop_if_running=True) or _start_when_free(
+        _run_repeat_job, "murmur-repeat"
+    )
+
+
+def _start_when_free(target: Callable[[], None], name: str) -> bool:
+    # The cue "Murmur" may still be wrapping up a stopped job; try again for a moment.
+    for _ in range(20):
+        time.sleep(0.05)
+        if _start_background_job(target, name):
+            return True
+    return False
+
+
 def start_hotkey() -> bool:
     global _HOTKEY_LISTENER
     try:
@@ -662,13 +735,14 @@ def start_hotkey() -> bool:
             on_fix=start_fix,
             on_read=lambda: start_read_full(stop_if_running=True),
             on_stop=stop_talking,
+            on_layer_open=open_key_layer,
+            on_layer_command=run_layer_command,
         )
         print(
-            f"Murmur hotkey: {hotkey.shortcuts_label()} starts announcements; "
-            "press either again to stop speech. "
-            f"{config.FIX_HOTKEY_LABEL} asks Codex to fix the last error. "
-            f"{config.READ_HOTKEY_LABEL} reads the full output word for word. "
-            "Control stops speech."
+            f"Murmur keys: double tap {config.DOUBLE_TAP_KEYS[hotkey.double_tap_choice()]}, then Space repeats, "
+            "R reads all, F fixes, U undoes, Escape cancels. "
+            f"Backups: {config.HOTKEY_LABEL} reads the last output, {config.FIX_HOTKEY_LABEL} fixes the last "
+            f"error with Codex, {config.READ_HOTKEY_LABEL} reads the full output. Control stops speech."
         )
         return True
     except Exception as error:
@@ -696,7 +770,7 @@ def _speak_label(item: rumps.MenuItem, label: str) -> None:
 def _read_last_output_label() -> str:
     return (
         "Read last output. Shortcut: "
-        f"{config.HOTKEY_SPOKEN}, or {hotkey.double_tap_label()}."
+        f"{config.HOTKEY_SPOKEN}, or double tap {config.DOUBLE_TAP_KEYS[hotkey.double_tap_choice()]} then Space."
     )
 
 
@@ -792,7 +866,7 @@ class MurmurApp(rumps.App):
         self.tap_items = {}
         for choice, name in config.DOUBLE_TAP_KEYS.items():
             item = rumps.MenuItem(name, callback=self._tap_chooser(choice))
-            _speak_label(item, f"{name}: tap it twice to read the last output")
+            _speak_label(item, f"{name}: double tap it for the Murmur keys")
             self.tap_items[choice] = item
             self.tap_menu.add(item)
 
