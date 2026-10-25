@@ -21,7 +21,7 @@ from murmur import demo, fixer, voice
 from murmur.cleaner import clean
 
 RECORDED = Path(__file__).resolve().parent / "recorded"
-COMMAND = "uv run pytest -q shop_demo_check.py"
+COMMAND = "uv run --project ~/murmur pytest -q shop_demo_check.py"  # what you type in the demo
 
 
 def main() -> int:
