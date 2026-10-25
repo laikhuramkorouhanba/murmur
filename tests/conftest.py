@@ -1,12 +1,14 @@
 import pytest
 
-from murmur import app, fixer, settings, watcher
+from murmur import app, config, fixer, settings, watcher
 
 
 @pytest.fixture(autouse=True)
 def private_settings_file(tmp_path, monkeypatch):
     """Give every test its own empty settings file, never the real one in your home folder."""
     monkeypatch.setattr(settings, "PATH", tmp_path / "settings.json")
+    # An empty audio folder, so no test ever plays a real pre-rendered recording.
+    monkeypatch.setattr(config, "AUDIO_DIR", tmp_path / "audio")
     # Fix it's saved diff and Codex log go in the test's own folder too.
     monkeypatch.setattr(fixer, "DIFF_PATH", tmp_path / "last_fix.diff")
     monkeypatch.setattr(fixer, "LOG_PATH", tmp_path / "last_fix_codex.log")

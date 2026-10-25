@@ -6,6 +6,7 @@ import struct
 import subprocess
 import threading
 import time
+import wave
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -13,7 +14,7 @@ from typing import Any
 import sounddevice
 
 from murmur import config, settings
-from murmur import personality
+from murmur import personality, prerender
 
 
 _SAMPLE_RATE = 22050
@@ -476,6 +477,46 @@ def _stream_openai_speech(
     return not _STOP_EVENT.is_set()
 
 
+def _play_prerendered(path: Any) -> str | None:
+    """Play a pre-rendered line. Returns None if the file can't be used, so we go live instead."""
+    global _LAST_FIRST_AUDIO
+    started = time.monotonic()
+    try:
+        with wave.open(str(path), "rb") as recording:
+            rate = recording.getframerate()
+            frames = recording.readframes(recording.getnframes())
+    except (OSError, EOFError, wave.Error) as error:
+        print(f"Murmur: a pre-rendered line couldn't be read ({_explain(error)}); speaking it live instead.")
+        return None
+    _LAST_FIRST_AUDIO = time.monotonic() - started
+    if _MUTED.is_set():
+        return "pre-rendered"
+    stream = None
+    try:
+        stream = sounddevice.RawOutputStream(samplerate=rate, channels=1, dtype="int16")
+        _set_active_stream(stream)
+        stream.start()
+        step = rate // 10 * 2  # a tenth of a second at a time, so a stop is heard quickly
+        for start in range(0, len(frames), step):
+            if _STOP_EVENT.is_set():
+                return "none (stopped)"
+            stream.write(frames[start : start + step])
+        stream.stop()
+        return "pre-rendered"
+    except Exception as error:
+        if _STOP_EVENT.is_set():
+            return "none (stopped)"
+        print(f"Murmur: a pre-rendered line couldn't play ({_explain(error)}); speaking it live instead.")
+        return None
+    finally:
+        _set_active_stream(None)
+        if stream is not None:
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+
 def speak(
     text: str,
     client: Any | None = None,
@@ -490,7 +531,9 @@ def speak(
     _tell_listeners(text)
     engine = "none (stopped)"
     try:
-        engine = _speak(text, client, mode)
+        # 1. a pre-rendered file, 2. live OpenAI speech, 3. the Mac voice (inside _speak).
+        recording = prerender.find(text, current_voice(), mode)
+        engine = (_play_prerendered(recording) if recording else None) or _speak(text, client, mode)
         return engine
     finally:
         _tell_listeners(None)

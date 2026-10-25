@@ -16,12 +16,13 @@ def welcome_text(
     *,
     app_name: str | None = None,
     missing: list[str] | None = None,
+    tap: str | None = None,
 ) -> str:
     """Build a brief welcome with shortcut help and only missing permissions."""
     selected = personality.Mode(mode) if mode is not None else personality.get_mode()
     app = app_name or hotkey.launching_app_name()
     missing = missing_permissions() if missing is None else missing
-    tap = hotkey.double_tap_label()
+    tap = tap or hotkey.double_tap_label()
 
     if selected is personality.Mode.SMOOTH:
         intro = "Hey, Murmur here."

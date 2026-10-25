@@ -175,7 +175,11 @@ def fix_line(kind: str) -> str:
 
 
 def sample_sentence() -> str:
-    if get_mode() is Mode.SMOOTH:
+    return sample_sentence_for(get_mode())
+
+
+def sample_sentence_for(mode: Mode | str) -> str:
+    if Mode(mode) is Mode.SMOOTH:
         return "Ooh, Murmur is ready to roll, cool cat."
     return "Murmur voice check is ready."
 
