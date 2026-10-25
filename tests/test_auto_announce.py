@@ -147,14 +147,21 @@ def test_hotkey_still_stops_speech_during_an_auto_announcement(monkeypatch) -> N
     assert app._JOB_CANCELLED.is_set()
 
 
-def test_menu_toggle_saves_the_choice_and_says_it_in_words(capsys) -> None:
+def test_auto_announce_menu_saves_the_choice_and_says_it_in_words(capsys) -> None:
     menu_app = app.MurmurApp()
-    assert menu_app.auto_item.state == 1
-    assert str(menu_app.auto_item._menuitem.accessibilityLabel()) == "Auto-announce finished commands, on"
+    assert menu_app.auto_items["short"].state == 1
+    assert str(menu_app.auto_menu._menuitem.accessibilityLabel()) == (
+        "Auto-announce, currently Errors and short output"
+    )
 
-    menu_app.toggle_auto(None)
+    menu_app.choose_auto("errors")
+    assert settings.get("auto_detail") == "errors" and settings.get("auto_announce") is True
+    assert menu_app.auto_items["errors"].state == 1 and menu_app.auto_items["short"].state == 0
+
+    menu_app.choose_auto("off")
 
     assert settings.get("auto_announce") is False
-    assert menu_app.auto_item.state == 0
-    assert str(menu_app.auto_item._menuitem.accessibilityLabel()) == "Auto-announce finished commands, off"
+    assert settings.get("auto_detail") == "errors"  # kept for when you turn it back on
+    assert menu_app.auto_items["off"].state == 1
+    assert menu_app.auto_menu.title == "Auto-announce: Off"
     assert "Murmur auto-announce: off. Turn it on in the Murmur menu." in capsys.readouterr().out

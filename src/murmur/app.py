@@ -408,9 +408,25 @@ def start_auto_announcement(finished: FinishedCommand) -> bool:
     return started
 
 
+_AUTO_LABELS = {
+    "off": "Off: only speak when you ask",
+    "errors": "Errors only: speak about errors; successes get the pass sound",
+    "short": "Errors and short output: errors, plus short output read word for word",
+    "everything": "Everything: errors, and all output read word for word",
+}
+
+
+def auto_choice() -> str:
+    """The Auto-announce menu choice: "off", "errors", "short" or "everything"."""
+    return auto_detail() if settings.get("auto_announce") else "off"
+
+
 def auto_announce_status() -> str:
     if settings.get("auto_announce"):
-        return "Murmur auto-announce: on. Murmur speaks up when a Terminal command finishes."
+        return (
+            f"Murmur auto-announce: {config.AUTO_DETAILS[auto_detail()]}. "
+            "Murmur speaks up when a Terminal command finishes."
+        )
     return "Murmur auto-announce: off. Turn it on in the Murmur menu."
 
 
@@ -721,7 +737,14 @@ class MurmurApp(rumps.App):
             self.read_full_item,
             f"Read full output, word for word. Shortcut: {config.READ_HOTKEY_SPOKEN}",
         )
-        self.auto_item = rumps.MenuItem("Auto-announce finished commands", callback=self.toggle_auto)
+        # Auto-announce: off, or how much to say when a command finishes on its own.
+        self.auto_menu = rumps.MenuItem("Auto-announce")
+        self.auto_items = {}
+        for choice, name in (("off", "Off"), *config.AUTO_DETAILS.items()):
+            item = rumps.MenuItem(name, callback=self._auto_chooser(choice))
+            _speak_label(item, _AUTO_LABELS[choice])
+            self.auto_items[choice] = item
+            self.auto_menu.add(item)
 
         self.personality_menu = rumps.MenuItem("Style")
         self.personality_items = {}
@@ -786,7 +809,7 @@ class MurmurApp(rumps.App):
             [
                 self.read_item,
                 self.read_full_item,
-                self.auto_item,
+                self.auto_menu,
                 None,
                 self.fix_item,
                 self.undo_item,
@@ -854,16 +877,26 @@ class MurmurApp(rumps.App):
     def open_last_fix_diff(self, _sender: object) -> None:
         open_last_fix_diff()
 
-    def toggle_auto(self, _sender: object) -> None:
-        settings.set("auto_announce", not settings.get("auto_announce"))
+    def _auto_chooser(self, choice: str) -> Callable[[object], None]:
+        def choose(_sender: object) -> None:
+            self.choose_auto(choice)
+
+        return choose
+
+    def choose_auto(self, choice: str) -> None:
+        """choice is "off", "errors", "short" or "everything"."""
+        settings.set("auto_announce", choice != "off")
+        if choice != "off":
+            settings.set("auto_detail", choice)
         self._show_auto_choice()
         print(auto_announce_status())
 
     def _show_auto_choice(self) -> None:
-        on = bool(settings.get("auto_announce"))
-        # The checkmark shows it visually; the spoken label says "on" or "off" in words.
-        self.auto_item.state = int(on)
-        _speak_label(self.auto_item, f"Auto-announce finished commands, {'on' if on else 'off'}")
+        current = auto_choice()
+        for choice, item in self.auto_items.items():
+            item.state = int(choice == current)
+        name = "Off" if current == "off" else config.AUTO_DETAILS[current]
+        self._show_submenu_choice(self.auto_menu, "Auto-announce", name)
 
     def toggle_captions(self, _sender: object) -> None:
         captions.CAPTIONS.set_enabled(not captions.enabled())
