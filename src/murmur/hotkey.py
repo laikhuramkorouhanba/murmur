@@ -4,7 +4,8 @@ There are two ways in:
 - ⌘⌥⇧M (Command + Option + Shift + M)
 - tapping one right-hand modifier key twice, quickly (Right Command by default)
 
-And one more: ⌘⌥⇧F asks Codex to fix the last error.
+And two more: ⌘⌥⇧F asks Codex to fix the last error, and ⌘⌥⇧R reads the
+full output word for word.
 """
 
 import ctypes
@@ -63,9 +64,11 @@ class ShortcutWatcher:
         on_first_event: Callable[[], None] | None = None,
         tap_choice: Callable[[], str] = double_tap_choice,
         on_fix: Callable[[], None] | None = None,
+        on_read: Callable[[], None] | None = None,
     ) -> None:
         self._on_activate = on_activate
         self._on_fix = on_fix
+        self._on_read = on_read
         self._keyboard = keyboard
         self._tap_choice = tap_choice
         self._clock = clock
@@ -114,6 +117,8 @@ class ShortcutWatcher:
             self._on_activate()
         elif code == config.FIX_KEY_CODE and self._on_fix is not None:
             self._on_fix()
+        elif code == config.READ_KEY_CODE and self._on_read is not None:
+            self._on_read()
 
     def release(self, key: Any) -> None:
         name = self._modifier_names.get(key)
@@ -193,7 +198,9 @@ def missing_permissions() -> list[str]:
 
 
 def start_hotkey_listener(
-    on_activate: Callable[[], None], on_fix: Callable[[], None] | None = None
+    on_activate: Callable[[], None],
+    on_fix: Callable[[], None] | None = None,
+    on_read: Callable[[], None] | None = None,
 ) -> Any:
     """Start the shortcuts, or explain exactly which permission is missing."""
     missing = missing_permissions()
@@ -210,6 +217,7 @@ def start_hotkey_listener(
         keyboard,
         on_activate,
         on_fix=on_fix,
+        on_read=on_read,
         on_first_event=lambda: print("Murmur hotkey: key events are arriving. Shortcuts are live."),
     )
     listener = keyboard.Listener(on_press=watcher.press, on_release=watcher.release)

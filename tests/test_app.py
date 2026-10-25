@@ -55,7 +55,7 @@ def test_hotkey_uses_the_same_job_with_stop_on_repeat(monkeypatch) -> None:
     starts = []
     sentinel_listener = object()
 
-    def fake_listener(callback, on_fix=None):
+    def fake_listener(callback, on_fix=None, on_read=None):
         callbacks.append(callback)
         assert on_fix is app.start_fix  # ⌘⌥⇧F goes straight to Fix it
         return sentinel_listener
@@ -75,7 +75,7 @@ def test_hotkey_uses_the_same_job_with_stop_on_repeat(monkeypatch) -> None:
 
 
 def test_hotkey_permission_problem_is_a_startup_warning(monkeypatch, capsys) -> None:
-    def fail_to_listen(_callback, on_fix=None):
+    def fail_to_listen(_callback, on_fix=None, on_read=None):
         raise RuntimeError("Enable Input Monitoring and Accessibility.")
 
     monkeypatch.setattr(app, "start_hotkey_listener", fail_to_listen)
@@ -83,19 +83,20 @@ def test_hotkey_permission_problem_is_a_startup_warning(monkeypatch, capsys) -> 
     app.start_hotkey()
 
     assert capsys.readouterr().err == (
-        "Murmur startup warning: hotkeys ⌘⌥⇧M, Right Command twice and ⌘⌥⇧F are unavailable. "
+        "Murmur startup warning: hotkeys ⌘⌥⇧M, Right Command twice, ⌘⌥⇧F and ⌘⌥⇧R are unavailable. "
         "Enable Input Monitoring and Accessibility.\n"
     )
 
 
 def test_successful_hotkey_startup_prints_the_shortcut(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(app, "start_hotkey_listener", lambda _callback, on_fix=None: object())
+    monkeypatch.setattr(app, "start_hotkey_listener", lambda _callback, on_fix=None, on_read=None: object())
 
     assert app.start_hotkey()
 
     assert capsys.readouterr().out == (
         "Murmur hotkey: ⌘⌥⇧M or Right Command twice starts announcements; "
-        "press either again to stop speech. ⌘⌥⇧F asks Codex to fix the last error.\n"
+        "press either again to stop speech. ⌘⌥⇧F asks Codex to fix the last error. "
+        "⌘⌥⇧R reads the full output word for word.\n"
     )
 
 

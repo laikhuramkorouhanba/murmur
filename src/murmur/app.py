@@ -17,7 +17,7 @@ from murmur.decision import (
     decide,
     speech_failure_summary,
 )
-from murmur import captions, fixer, hotkey, keychain, packaged, settings, watcher, welcome
+from murmur import captions, fixer, hotkey, keychain, packaged, readout, settings, watcher, welcome
 from murmur.hotkey import start_hotkey_listener
 from murmur.monitor import AutoAnnouncer, FinishedCommand
 from murmur import personality
@@ -31,6 +31,8 @@ _JOB_ACTIVE = False
 _JOB_NAME: str | None = None  # which job is running, like "murmur-fix"
 _JOB_CANCELLED = threading.Event()
 _HOTKEY_LISTENER = None
+_LAST_OUTPUT_LOCK = threading.Lock()
+_LAST_OUTPUT: str | None = None  # the cleaned output of the last command Murmur read
 _AUTO_ANNOUNCER: AutoAnnouncer | None = None
 
 
@@ -98,6 +100,7 @@ def announce_last_output(
         print("----- End of Murmur announcement -----")
         return
     cleaned = clean(last_command_output(history))
+    _remember_output(cleaned)
 
     print(cleaned or "(No output found for the last command.)")
     failed = contains_error(cleaned)
@@ -152,6 +155,7 @@ def announce_finished_command(
         return
 
     cleaned = clean(last_command_output(history))
+    _remember_output(cleaned)
     action = auto_action(cleaned, finished.seconds)
     if action is AutoAction.ANNOUNCE:
         # Errors get exactly what the hotkey gives, reusing the text we already read.
@@ -178,6 +182,65 @@ def announce_finished_command(
         engine = voice.speak(line, mode=personality.get_mode())
     print(f"Voice engine: {engine}")
     print("----- End of Murmur auto-announce -----")
+
+
+def _remember_output(cleaned: str) -> None:
+    global _LAST_OUTPUT
+    with _LAST_OUTPUT_LOCK:
+        _LAST_OUTPUT = cleaned
+
+
+def last_output() -> str | None:
+    with _LAST_OUTPUT_LOCK:
+        return _LAST_OUTPUT
+
+
+def read_full_output(
+    cancel_event: threading.Event | None = None,
+    *,
+    read_text: Callable[[], str] | None = None,
+) -> None:
+    """Read the last command's whole cleaned output aloud, word for word, in Focused style.
+
+    With auto-announce on, that's the last command Murmur saw finish (in any tab).
+    Otherwise we read the front Terminal tab now, so it's never out of date.
+    """
+    cancelled = cancel_event or threading.Event()
+    print("----- Murmur: full output -----")
+    text = last_output() if settings.get("auto_announce") else None
+    if text is None:
+        try:
+            text = clean(last_command_output((read_text or get_terminal_text)()))
+        except RuntimeError as error:
+            text = None
+            print(error)
+            voice.speak(str(error), mode=personality.Mode.FOCUSED)
+    if text is not None:
+        spoken = readout.speakable(text) or "There's no output to read."
+        print(spoken)
+        engine = "none (stopped)"
+        for piece in readout.pieces(spoken):
+            if cancelled.is_set():
+                engine = "none (stopped)"
+                break
+            # Always Focused: no openers, no jokes, just the words.
+            engine = voice.speak(piece, mode=personality.Mode.FOCUSED)
+        print(f"Voice engine: {engine}")
+    print("----- End of Murmur full output -----")
+
+
+def _run_read_full_job() -> None:
+    global _JOB_ACTIVE
+    try:
+        read_full_output(_JOB_CANCELLED)
+    finally:
+        with _JOB_LOCK:
+            _JOB_ACTIVE = False
+
+
+def start_read_full(*, stop_if_running: bool = False) -> bool:
+    """Read the full output in the background. Any Murmur shortcut stops it."""
+    return _start_background_job(_run_read_full_job, "murmur-read-full", stop_if_running=stop_if_running)
 
 
 def _run_announcement_job() -> None:
@@ -456,17 +519,20 @@ def start_hotkey() -> bool:
         _HOTKEY_LISTENER = start_hotkey_listener(
             lambda: start_announcement(stop_if_running=True),
             on_fix=start_fix,
+            on_read=lambda: start_read_full(stop_if_running=True),
         )
         print(
             f"Murmur hotkey: {hotkey.shortcuts_label()} starts announcements; "
             "press either again to stop speech. "
-            f"{config.FIX_HOTKEY_LABEL} asks Codex to fix the last error."
+            f"{config.FIX_HOTKEY_LABEL} asks Codex to fix the last error. "
+            f"{config.READ_HOTKEY_LABEL} reads the full output word for word."
         )
         return True
     except Exception as error:
         print(
             f"Murmur startup warning: hotkeys {config.HOTKEY_LABEL}, "
-            f"{hotkey.double_tap_label()} and {config.FIX_HOTKEY_LABEL} are unavailable. {error}",
+            f"{hotkey.double_tap_label()}, {config.FIX_HOTKEY_LABEL} and "
+            f"{config.READ_HOTKEY_LABEL} are unavailable. {error}",
             file=sys.stderr,
         )
         return False
@@ -508,6 +574,13 @@ class MurmurApp(rumps.App):
         super().__init__("Murmur", quit_button="Quit Murmur")
 
         self.read_item = rumps.MenuItem(read_last_output_title(), callback=self.read_last_output)
+        self.read_full_item = rumps.MenuItem(
+            f"Read full output ({config.READ_HOTKEY_LABEL})", callback=self.read_full
+        )
+        _speak_label(
+            self.read_full_item,
+            f"Read full output, word for word. Shortcut: {config.READ_HOTKEY_SPOKEN}",
+        )
         self.auto_item = rumps.MenuItem("Auto-announce finished commands", callback=self.toggle_auto)
 
         self.personality_menu = rumps.MenuItem("Personality")
@@ -556,6 +629,7 @@ class MurmurApp(rumps.App):
         self.menu.update(
             [
                 self.read_item,
+                self.read_full_item,
                 self.auto_item,
                 None,
                 self.fix_item,
@@ -712,6 +786,9 @@ class MurmurApp(rumps.App):
         self._show_submenu_choice(self.tap_menu, "Double-tap key", config.DOUBLE_TAP_KEYS[current])
         self.read_item.title = read_last_output_title()
         _speak_label(self.read_item, _read_last_output_label())
+
+    def read_full(self, _sender: object) -> None:
+        start_read_full()
 
     def read_last_output(self, _sender: object) -> None:
         start_announcement()

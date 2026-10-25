@@ -66,6 +66,9 @@ HOTKEY_SPOKEN = "Command Option Shift M"
 FIX_KEY_CODE = 3  # the F key's physical code, so Option can't turn it into another letter
 FIX_HOTKEY_LABEL = "⌘⌥⇧F"
 FIX_HOTKEY_SPOKEN = "Command Option Shift F"
+READ_KEY_CODE = 15  # the R key's physical code
+READ_HOTKEY_LABEL = "⌘⌥⇧R"
+READ_HOTKEY_SPOKEN = "Command Option Shift R"
 
 # Keys you can double-tap to start Murmur. Pick one in the "Double-tap key" menu.
 DOUBLE_TAP_KEYS = {
