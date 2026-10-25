@@ -38,6 +38,8 @@ def private_settings_file(tmp_path, monkeypatch):
     monkeypatch.setattr(voice, "voiceover_running", lambda: False)
     # No test plays real sound (the pass and fail sounds come before almost everything now).
     monkeypatch.setattr(voice.sounddevice, "RawOutputStream", SilentStream)
+    # Every test opens its own speaker stream, never one kept open by an earlier test.
+    voice._drop_output()
 
 
 @pytest.fixture(autouse=True)

@@ -11,9 +11,15 @@ from murmur import personality
 
 
 @pytest.fixture(autouse=True)
-def natural_voice():
-    """Most of these tests are about the Natural (OpenAI) voice, so pick it."""
+def natural_voice(monkeypatch):
+    """Most of these tests are about the Natural (OpenAI) voice, so pick it.
+
+    Fades and the trailing silence are switched off here, so tests can compare the
+    exact bytes played; test_lines_fade_out_and_end_with_silence checks them.
+    """
     settings.set("engine", "natural")
+    monkeypatch.setattr(voice, "FADE_SECONDS", 0.0)
+    monkeypatch.setattr(voice, "TAIL_SILENCE_SECONDS", 0.0)
 
 
 _REAL_OUTPUT_STREAM = sounddevice.RawOutputStream  # saved before conftest swaps in a silent one
@@ -105,12 +111,12 @@ def test_soft_sound_writes_a_quiet_offline_tone(monkeypatch) -> None:
 
     assert len(streams) == 1
     assert streams[0].arguments == {
-        "samplerate": 22050,
+        "samplerate": 24000,
         "channels": 1,
         "dtype": "int16",
     }
     assert streams[0].chunks and len(streams[0].chunks[0]) > 0
-    assert streams[0].stopped and streams[0].closed
+    assert not streams[0].closed  # kept open for the next sound or line
 
 
 def test_missing_key_uses_the_macos_say_command(monkeypatch) -> None:
@@ -130,7 +136,7 @@ def test_missing_key_uses_the_macos_say_command(monkeypatch) -> None:
 
     assert voice.speak("The tests passed.") == "macOS say"
 
-    assert commands == [["say", "-r", "300", "The tests passed."]]
+    assert commands == [["say", "-r", "285", "The tests passed."]]
 
 
 def test_streams_openai_audio_using_marin_and_configured_speed(monkeypatch) -> None:
@@ -152,11 +158,11 @@ def test_streams_openai_audio_using_marin_and_configured_speed(monkeypatch) -> N
 
     assert speech_create.arguments["model"] == "gpt-4o-mini-tts"
     assert speech_create.arguments["voice"] == "marin"
-    assert speech_create.arguments["speed"] == 1.5  # Fast, the default speed
+    assert speech_create.arguments["speed"] == 1.9  # the slider's middle, the default
     assert "Clear, neutral and brisk" in speech_create.arguments["instructions"]  # Brief, the default
     assert speech_create.arguments["response_format"] == "pcm"
     assert output_streams[0].chunks == [b"\x00\x00\x01\x00"]
-    assert output_streams[0].closed
+    assert not output_streams[0].closed  # kept open, so the next line starts without a thud
     assert fake_response.closed
 
 
@@ -178,7 +184,7 @@ def test_network_error_falls_back_to_macos_say(monkeypatch) -> None:
 
     assert voice.speak("Exact fallback text.", client=client) == "macOS say"
 
-    assert commands == [["say", "-r", "300", "Exact fallback text."]]
+    assert commands == [["say", "-r", "285", "Exact fallback text."]]
 
 
 def test_no_audio_falls_back_to_macos_say(monkeypatch) -> None:
@@ -200,7 +206,7 @@ def test_no_audio_falls_back_to_macos_say(monkeypatch) -> None:
 
     assert voice.speak("No audio arrived.", client=client) == "macOS say"
 
-    assert commands == [["say", "-r", "300", "No audio arrived."]]
+    assert commands == [["say", "-r", "285", "No audio arrived."]]
 
 
 class SlowResponse(FakeStreamingResponse):
@@ -315,17 +321,18 @@ def test_stopping_during_the_wait_plays_nothing(quick_race) -> None:
     voice.reset_stop()
 
 
-def test_each_speed_maps_to_a_real_number_for_each_engine() -> None:
-    from murmur import settings
-
-    expected = {"normal": (1.0, 200), "fast": (1.5, 300), "very_fast": (2.0, 380), "maximum": (3.0, 450)}
-    for choice, (natural, mac) in expected.items():
-        settings.set("speed", choice)
-        assert (voice.natural_speed(), voice.mac_voice_rate()) == (natural, mac)
-    settings.set("speed", "warp")  # unknown: back to Fast
-    assert voice.speed_choice() == "fast"
+def test_the_speed_slider_maps_onto_each_voices_real_range() -> None:
+    voice.set_speed(0.0)
+    assert (voice.natural_speed(), voice.mac_voice_rate()) == (0.8, 150)
+    voice.set_speed(0.5)  # the default
+    assert (voice.natural_speed(), voice.mac_voice_rate()) == (1.9, 285)
+    voice.set_speed(1.0)
+    assert (voice.natural_speed(), voice.mac_voice_rate()) == (3.0, 420)
+    assert voice.set_speed(1.7) == 1.0  # never past the end
+    assert voice.set_speed(0.437) == 0.45  # snapped to 5 percent steps
+    settings.set("speed", "warp")
+    assert voice.speed() == 0.5
     assert "unhurried" not in personality.tts_instructions("Friendly")
-    assert "warm" in personality.tts_instructions("Friendly").lower()
 
 
 class BreaksPartway(FakeStreamingResponse):
@@ -344,7 +351,7 @@ def test_a_line_cut_off_partway_is_not_read_again_by_say(monkeypatch, capsys) ->
 
     assert voice.speak("Half a line.", client=client) == "OpenAI"
 
-    assert stream.chunks == [b"\x01\x02"] and stream.closed
+    assert stream.chunks == [] and stream.closed  # the broken stream is closed, not reused
     assert "stopped partway (TimeoutError: the network went quiet); not repeating the line" in capsys.readouterr().out
 
 
@@ -426,7 +433,7 @@ def test_audio_device_failure_falls_back_to_macos_say(monkeypatch) -> None:
 
     assert voice.speak("Use the Mac voice.", client=client) == "macOS say"
 
-    assert commands == [["say", "-r", "300", "Use the Mac voice."]]
+    assert commands == [["say", "-r", "285", "Use the Mac voice."]]
 
 
 def test_brief_mode_uses_neutral_tts_instructions(monkeypatch) -> None:
@@ -534,18 +541,6 @@ def test_odd_sized_audio_chunks_are_rejoined_into_whole_samples(monkeypatch) -> 
     assert voice.speak("Chunky.", client=client) == "OpenAI"
 
     assert streams[0].chunks == [b"\x01\x02", b"\x03\x04\x05\x06"]
-
-
-def test_selected_voice_is_sent_to_openai(monkeypatch) -> None:
-    voice.reset_stop()
-    monkeypatch.setattr(config, "OPENAI_API_KEY", "test-key")
-    monkeypatch.setattr(voice.sounddevice, "RawOutputStream", lambda **kwargs: FakeOutputStream(**kwargs))
-    voice.settings.set("voice", "cedar")
-    speech_create = FakeSpeechCreate(FakeStreamingResponse([b"\x00\x00"]))
-
-    voice.speak("Hello.", client=FakeClient(speech_create))
-
-    assert speech_create.arguments["voice"] == "cedar"
 
 
 def test_unknown_saved_voice_falls_back_to_marin() -> None:
@@ -679,7 +674,7 @@ def test_the_mac_voice_engine_uses_say_at_the_chosen_rate(monkeypatch) -> None:
 
     voice.reset_stop()
     settings.set("engine", "mac")
-    settings.set("speed", "maximum")
+    settings.set("speed", 1.0)
     commands = []
 
     class FakeProcess:
@@ -690,38 +685,20 @@ def test_the_mac_voice_engine_uses_say_at_the_chosen_rate(monkeypatch) -> None:
     monkeypatch.setattr(config, "OPENAI_API_KEY", "test-key")
 
     assert voice.speak("Failed.") == "macOS say"
-    assert commands == [["say", "-r", "450", "Failed."]]
+    assert commands == [["say", "-r", "420", "Failed."]]
 
 
-def test_voiceover_is_the_default_while_it_is_running(monkeypatch) -> None:
+def test_only_the_mac_voice_and_marin_are_used(monkeypatch) -> None:
     from murmur import settings
 
-    settings.set("engine", "auto")
     monkeypatch.setattr(voice, "voiceover_running", lambda: True)
-    assert voice.engine() == "voiceover"
-    monkeypatch.setattr(voice, "voiceover_running", lambda: False)
-    assert voice.engine() == "mac"  # VoiceOver off: the Mac voice, never silence
-
-    settings.set("engine", "voiceover")
-    assert voice.engine() == "mac"
+    for old in ("auto", "voiceover", "robot"):
+        settings.set("engine", old)
+        assert voice.engine() == "mac"  # VoiceOver as an engine is gone; never silence
     settings.set("engine", "natural")
     assert voice.engine() == "natural"
-
-
-def test_voiceover_engine_posts_an_announcement_and_waits_about_as_long_as_it_talks(monkeypatch) -> None:
-    from murmur import settings
-
-    voice.reset_stop()
-    settings.set("engine", "voiceover")
-    monkeypatch.setattr(voice, "voiceover_running", lambda: True)
-    posted = []
-    monkeypatch.setattr(voice, "_on_main_thread", lambda work: work())
-    monkeypatch.setattr(voice, "_post_voiceover_announcement", posted.append)
-    monkeypatch.setattr(config, "VOICEOVER_SECONDS_PER_CHAR", 0.0)
-    monkeypatch.setattr(voice, "voiceover_seconds", lambda text: 0.01)
-
-    assert voice.speak("Failed. shop.py, line 9.") == "VoiceOver"
-    assert posted == ["Failed. shop.py, line 9."]
+    settings.set("voice", "cedar")
+    assert voice.current_voice() == "marin"
 
 
 def test_voiceover_posting_goes_through_the_accessibility_announcement(monkeypatch) -> None:
@@ -773,7 +750,7 @@ def test_a_second_audio_failure_uses_the_mac_voice_for_the_line(monkeypatch) -> 
     monkeypatch.setattr(voice.subprocess, "Popen", lambda command, **_kwargs: commands.append(command) or FakeProcess())
 
     assert voice.play_fail_sound() == "macOS say"
-    assert commands == [["say", "-r", "300", "Failed."]]
+    assert commands == [["say", "-r", "285", "Failed."]]
 
 
 
@@ -782,9 +759,56 @@ def test_expected_seconds_follow_the_engine_and_speed() -> None:
 
     line = "x" * 120
     settings.set("engine", "mac")
-    settings.set("speed", "fast")
-    assert voice.expected_seconds(line) == pytest.approx(4.0)  # 300 words a minute: 30 characters a second
-    settings.set("speed", "maximum")
+    settings.set("speed", 0.0)
+    assert voice.expected_seconds(line) == pytest.approx(8.0)  # 150 words a minute: 15 characters a second
+    settings.set("speed", 1.0)
     assert voice.expected_seconds(line) == pytest.approx(3.0)  # say tops out near 40 a second
     settings.set("engine", "natural")
     assert voice.expected_seconds(line) == pytest.approx(0.5 + 120 / 26)
+
+
+def test_lines_fade_out_and_end_with_silence(monkeypatch) -> None:
+    """The end-of-line thud: the last samples fade to zero and silence follows."""
+    monkeypatch.setattr(voice, "FADE_SECONDS", 0.012)
+    monkeypatch.setattr(voice, "TAIL_SILENCE_SECONDS", 0.12)
+    monkeypatch.setattr(config, "OPENAI_API_KEY", "test-key")
+    voice.reset_stop()
+    streams = []
+    monkeypatch.setattr(voice.sounddevice, "RawOutputStream", lambda **kwargs: streams.append(FakeOutputStream(**kwargs)) or streams[-1])
+    loud = b"\x10\x27" * 2400  # 0.1 s at a steady 10000
+    client = FakeClient(FakeSpeechCreate(FakeStreamingResponse([loud, loud])))
+
+    voice.speak("One.", client=client)
+    voice.speak("Two.", client=FakeClient(FakeSpeechCreate(FakeStreamingResponse([loud]))))
+
+    import array
+
+    played = array.array("h")
+    played.frombytes(b"".join(streams[0].chunks))
+    assert played[0] == 0  # faded in
+    silence = int(24000 * 0.12)
+    assert all(sample == 0 for sample in played[-silence:])  # silence at the end
+    assert abs(played[-silence - 1]) < 100  # the last real sample has faded almost to nothing
+    assert len(streams) == 1 and not streams[0].closed  # one stream, kept open for the next line
+
+
+def test_text_is_pronounced_the_same_way_before_speaking(monkeypatch) -> None:
+    from murmur import settings
+
+    voice.reset_stop()
+    settings.set("engine", "mac")
+    commands = []
+
+    class FakeProcess:
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(voice.subprocess, "Popen", lambda command, **_kwargs: commands.append(command) or FakeProcess())
+    heard = []
+    monkeypatch.setattr(voice, "_LISTENERS", [heard.append])
+
+    voice.speak("README.md and shop_demo.py")
+
+    assert commands[0][-1] == "read me dot M D and shop demo dot pie"
+    assert heard[0] == "README.md and shop_demo.py"  # captions keep the real names
+

@@ -1,5 +1,6 @@
 """Offline sound and speech, with streamed OpenAI voice when it is available."""
 
+import array
 import math
 import re
 import struct
@@ -14,10 +15,10 @@ from typing import Any
 import sounddevice
 
 from murmur import config, settings
-from murmur import personality, prerender
+from murmur import personality, prerender, pronounce
 
 
-_SAMPLE_RATE = 22050
+_SAMPLE_RATE = 24000  # the same rate as OpenAI's speech, so one speaker stream plays everything
 _STOP_EVENT = threading.Event()  # stop everything until the next job starts
 _HUSH_EVENT = threading.Event()  # stop just the current line (Control during a fix)
 _STATE_LOCK = threading.Lock()
@@ -98,13 +99,12 @@ def _say_instead(text: str, reason: str) -> str:
 
 
 def current_voice() -> str:
-    """The Natural voice picked in the menu, or Marin if the saved one is unknown."""
-    chosen = settings.get("voice")
-    return chosen if chosen in config.VOICES else config.VOICE
+    """The Natural voice. Only Marin is offered now (Cedar may come back later)."""
+    return config.VOICE
 
 
 def voiceover_running() -> bool:
-    """Ask macOS whether VoiceOver is on right now. Cheap, so we ask before every line."""
+    """Ask macOS whether VoiceOver is on right now. Cheap, so we ask before every announcement."""
     try:
         import AppKit
 
@@ -113,37 +113,43 @@ def voiceover_running() -> bool:
         return False
 
 
-def chosen_engine() -> str:
-    """What the menu says: "auto", "voiceover", "mac" or "natural"."""
-    chosen = settings.get("engine")
-    return chosen if chosen in config.ENGINES else "auto"
-
-
 def engine() -> str:
-    """Who actually speaks the next line: "voiceover", "mac" or "natural".
-
-    VoiceOver only works while it's running. If it's off, the Mac voice takes
-    over, so you never end up with silence.
-    """
-    chosen = chosen_engine()
-    if chosen in ("auto", "voiceover"):
-        return "voiceover" if voiceover_running() else "mac"
-    return chosen
+    """Who speaks: "natural" (OpenAI's Marin) if picked in the menu, otherwise "mac"."""
+    return "natural" if settings.get("engine") == "natural" else "mac"
 
 
-def speed_choice() -> str:
-    chosen = settings.get("speed")
-    return chosen if chosen in config.SPEEDS else settings.DEFAULTS["speed"]
+def speed() -> float:
+    """The Speed slider's position, from 0 (slowest) to 1 (fastest)."""
+    value = settings.get("speed")
+    if isinstance(value, str):  # an old preset name, before the settings were migrated
+        value = config.OLD_SPEED_PRESETS.get(value, config.SPEED_DEFAULT)
+    try:
+        return min(1.0, max(0.0, float(value)))
+    except (TypeError, ValueError):
+        return config.SPEED_DEFAULT
+
+
+def set_speed(value: float) -> float:
+    """Save a new speed (snapped to SPEED_ROUNDING steps) and return it."""
+    snapped = round(min(1.0, max(0.0, value)) / config.SPEED_ROUNDING) * config.SPEED_ROUNDING
+    snapped = round(snapped, 2)
+    settings.set("speed", snapped)
+    return snapped
+
+
+def _along(low_high: tuple[float, float], position: float) -> float:
+    low, high = low_high
+    return low + (high - low) * position
 
 
 def natural_speed() -> float:
-    """OpenAI's speed number for the chosen speed."""
-    return config.NATURAL_SPEEDS[speed_choice()]
+    """OpenAI's speed number for the slider position."""
+    return round(_along(config.NATURAL_SPEED_RANGE, speed()), 2)
 
 
 def mac_voice_rate() -> int:
-    """The Mac voice's words per minute for the chosen speed."""
-    return config.MAC_VOICE_RATES[speed_choice()]
+    """The Mac voice's words per minute for the slider position."""
+    return int(round(_along(config.MAC_VOICE_RATE_RANGE, speed())))
 
 
 def _tts_timeout() -> Any:
@@ -274,6 +280,7 @@ def _silence_now() -> None:
             stream.abort()
         except Exception:
             pass
+        _drop_output()  # an aborted stream has to be opened fresh next time
 
 
 class AudioDeviceProblem(Exception):
@@ -317,6 +324,83 @@ def _open_output(rate: int) -> Any:
             print(f"Murmur: the audio device had a problem ({_explain(error)}); restarting audio and trying once more.")
             _restart_audio()
     raise AssertionError("unreachable")
+
+
+# ---------------------------------------------------------------------------
+# One speaker stream that stays open between lines.
+#
+# Opening and closing the speakers for every line made an audible thud at the end
+# of a line. Now the stream stays open, each sound fades in and out over a few
+# milliseconds, and a little silence follows, so a line ends softly. The stream
+# closes itself after a minute of quiet.
+# ---------------------------------------------------------------------------
+
+FADE_SECONDS = 0.012
+TAIL_SILENCE_SECONDS = 0.12
+OUTPUT_IDLE_SECONDS = 60.0
+_OUTPUT: Any | None = None
+_OUTPUT_LOCK = threading.Lock()
+_OUTPUT_TIMER: threading.Timer | None = None
+
+
+def _output() -> Any:
+    """The shared speaker stream, opened if needed. Raises AudioDeviceProblem if it can't be."""
+    global _OUTPUT, _OUTPUT_TIMER
+    with _OUTPUT_LOCK:
+        if _OUTPUT_TIMER is not None:
+            _OUTPUT_TIMER.cancel()
+            _OUTPUT_TIMER = None
+        if _OUTPUT is None:
+            _OUTPUT = _open_output(_SAMPLE_RATE)
+        stream = _OUTPUT
+    _set_active_stream(stream)
+    return stream
+
+
+def _done_with_output() -> None:
+    """A line finished: keep the stream open for the next one, and close it after a quiet minute."""
+    global _OUTPUT_TIMER
+    _set_active_stream(None)
+    with _OUTPUT_LOCK:
+        if _OUTPUT is None:
+            return
+        _OUTPUT_TIMER = threading.Timer(OUTPUT_IDLE_SECONDS, _drop_output)
+        _OUTPUT_TIMER.daemon = True
+        _OUTPUT_TIMER.start()
+
+
+def _drop_output() -> None:
+    """Close the shared stream (after a stop, an error, or a quiet minute)."""
+    global _OUTPUT
+    with _OUTPUT_LOCK:
+        stream, _OUTPUT = _OUTPUT, None
+    if stream is not None:
+        try:
+            stream.abort()
+        except Exception:
+            pass
+        try:
+            stream.close()
+        except Exception:
+            pass
+
+
+def _faded(pcm: bytes, *, fade_in: bool = False, fade_out: bool = False) -> bytes:
+    """16-bit mono samples with a short fade at the start and/or end, so nothing clicks."""
+    samples = array.array("h")
+    samples.frombytes(pcm[: len(pcm) - len(pcm) % 2])
+    count = min(len(samples), int(_SAMPLE_RATE * FADE_SECONDS))
+    for index in range(count):
+        share = index / count
+        if fade_in:
+            samples[index] = int(samples[index] * share)
+        if fade_out:
+            samples[-1 - index] = int(samples[-1 - index] * share)
+    return samples.tobytes()
+
+
+def _tail_silence() -> bytes:
+    return b"\x00\x00" * int(_SAMPLE_RATE * TAIL_SILENCE_SECONDS)
 
 
 # Two notes going up for a pass, two lower notes going down for a fail: easy to tell apart.
@@ -377,23 +461,17 @@ def _play_sound(sound: bytes, caption: str, words_instead: str) -> str:
 
 
 def _play_tone(sound: bytes, words_instead: str) -> str:
-    stream = None
     try:
-        stream = _open_output(_SAMPLE_RATE)
-        stream.write(sound)
-        stream.stop()
+        stream = _output()
+        stream.write(sound + _tail_silence())
         return "sounddevice"
     except Exception as error:
+        _drop_output()
         if not _stopped():
             return _say_instead(words_instead, f"the sound could not play ({_explain(error)}).")
         return "none (stopped)"
     finally:
-        _set_active_stream(None)
-        if stream is not None:
-            try:
-                stream.close()
-            except Exception:
-                pass
+        _done_with_output()
 
 
 def _speak_with_system_voice(text: str) -> bool:
@@ -458,12 +536,9 @@ def expected_seconds(text: str) -> float:
     and tops out near 40; OpenAI speaks about 10 characters a second at speed 1,
     and about 26 at speed 3.
     """
-    which = engine()
-    if which == "voiceover":
-        return voiceover_seconds(text)
-    if which == "mac":
+    if engine() == "mac":
         return len(text) / (min(mac_voice_rate(), 400) / 10)
-    recording = prerender.find(text, current_voice(), None, speed_choice())
+    recording = prerender.find(text, current_voice(), None, natural_speed())
     if recording is not None:
         try:
             with wave.open(str(recording), "rb") as audio:
@@ -474,6 +549,8 @@ def expected_seconds(text: str) -> float:
 
 
 def _announce_with_voiceover(text: str) -> str:
+    """Not used for now: in a real test, VoiceOver didn't speak announcements from Murmur.
+    Kept for later. While VoiceOver runs, auto-announce plays only the pass and fail sounds."""
     if _MUTED.is_set():
         return "VoiceOver (muted)"
     try:
@@ -622,6 +699,8 @@ def _stream_openai_speech(
     output = None
     got_audio = False
     leftover = b""
+    held = b""  # one piece held back, so the very last one can be faded out
+    started = False
     _LAST_FIRST_AUDIO = time.monotonic() - requested_at
     _LAST_ATTEMPT = winner.number
     which = " (second request)" if winner.number == 2 else ""
@@ -639,7 +718,7 @@ def _stream_openai_speech(
                 continue
             if not got_audio:
                 if not _MUTED.is_set():
-                    output = _open_output(24000)  # if the speakers won't open, `say` reads the line
+                    output = _output()  # if the speakers won't open, `say` reads the line
                 got_audio = True  # only once the speaker really opened
             if output is None:
                 continue  # muted: keep reading so the request finishes normally
@@ -647,9 +726,19 @@ def _stream_openai_speech(
             chunk = leftover + chunk
             cut = len(chunk) - len(chunk) % 2
             leftover = chunk[cut:]
-            if cut:
-                output.write(chunk[:cut])
+            if not cut:
+                continue
+            if held:
+                output.write(held)
+                held = chunk[:cut]
+            else:
+                held = _faded(chunk[:cut], fade_in=not started)
+            started = True
+        if output is not None and not _stopped():
+            # The last piece fades out, then a little silence: the line ends softly, no thud.
+            output.write(_faded(held, fade_out=True) + _tail_silence())
     except Exception as error:
+        _drop_output()
         if not got_audio:
             raise  # nothing played yet, so `say` can read the whole line instead
         # Part of the line already played. Reading it all again with `say` would be
@@ -658,12 +747,8 @@ def _stream_openai_speech(
         return not _stopped()
     finally:
         winner.close()
-        _set_active_stream(None)
         if output is not None:
-            try:
-                output.stop()
-            finally:
-                output.close()
+            _done_with_output()  # the stream stays open for the next line
     return not _stopped()
 
 
@@ -681,33 +766,31 @@ def _play_prerendered(path: Any, text: str) -> str | None:
     except (OSError, EOFError, wave.Error) as error:
         print(f"Murmur: a pre-rendered line couldn't be read ({_explain(error)}); speaking it live instead.")
         return None
+    if rate != _SAMPLE_RATE:
+        print(f"Murmur: a pre-rendered line has an unexpected sample rate ({rate}); speaking it live instead.")
+        return None
     _LAST_FIRST_AUDIO = time.monotonic() - started
     if _MUTED.is_set():
         return "pre-rendered"
-    stream = None
     try:
-        stream = _open_output(rate)
+        stream = _output()
+        sound = _faded(frames, fade_in=True, fade_out=True) + _tail_silence()
         step = rate // 10 * 2  # a tenth of a second at a time, so a stop is heard quickly
-        for start in range(0, len(frames), step):
+        for start in range(0, len(sound), step):
             if _stopped():
                 return "none (stopped)"
-            stream.write(frames[start : start + step])
-        stream.stop()
+            stream.write(sound[start : start + step])
         return "pre-rendered"
     except AudioDeviceProblem as error:
         return _say_instead(text, f"{error}")
     except Exception as error:
+        _drop_output()
         if _stopped():
             return "none (stopped)"
         print(f"Murmur: a pre-rendered line couldn't play ({_explain(error)}); speaking it live instead.")
         return None
     finally:
-        _set_active_stream(None)
-        if stream is not None:
-            try:
-                stream.close()
-            except Exception:
-                pass
+        _done_with_output()
 
 
 def speak(
@@ -716,7 +799,7 @@ def speak(
     *,
     mode: personality.Mode | str | None = None,
 ) -> str:
-    """Speak text with the chosen engine: VoiceOver, the Mac voice, or the Natural (OpenAI) voice.
+    """Speak text with the chosen engine: the Mac voice, or the Natural (OpenAI) voice.
 
     The Natural voice falls back to the Mac voice whenever OpenAI can't help.
     """
@@ -725,18 +808,16 @@ def speak(
     _HUSH_EVENT.clear()  # a Control press only silences the line that was playing then
     global _LAST_FIRST_AUDIO, _LAST_ATTEMPT
     _LAST_FIRST_AUDIO, _LAST_ATTEMPT = None, 1
-    _tell_listeners(text)
+    _tell_listeners(text)  # captions show the real words
+    said = pronounce.spoken(text)  # the voice gets names spelled the way they should sound
     used = "none (stopped)"
     try:
-        which = engine()
-        if which == "voiceover":
-            used = _announce_with_voiceover(text)
-        elif which == "mac":
-            used = _say(text)
+        if engine() == "mac":
+            used = _say(said)
         else:
             # 1. a pre-rendered file, 2. live OpenAI speech, 3. the Mac voice (inside _speak).
-            recording = prerender.find(text, current_voice(), mode, speed_choice())
-            used = (_play_prerendered(recording, text) if recording else None) or _speak(text, client, mode)
+            recording = prerender.find(text, current_voice(), mode, natural_speed())
+            used = (_play_prerendered(recording, said) if recording else None) or _speak(said, client, mode)
         return used
     finally:
         _tell_listeners(None)
