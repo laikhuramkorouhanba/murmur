@@ -55,6 +55,26 @@ codex login
 
 This makes `dist/Murmur.app` with PyInstaller. It runs without a terminal, lives only in the menu bar (no Dock icon), and writes its log to `~/Library/Logs/Murmur/murmur.log` (**Show log** in the menu). The first time it starts without a key, it asks for your OpenAI API key and keeps it in the macOS Keychain; change it later with **Set OpenAI API key…**. The app never reads `.env`. It is not signed or notarized, so the first time, right-click it and choose **Open**. macOS asks for permissions for Murmur itself, and after each rebuild you may need to turn Murmur off and on again under Accessibility and Input Monitoring.
 
+### Self-test
+
+```sh
+uv run python -m murmur.selftest --no-codex --muted
+```
+
+Runs Murmur's real pipeline end to end, without the menu bar. It opens its own Terminal window (it never touches yours) with the virtual env active, then:
+- rebuilds the demo and runs the failing test;
+- waits for auto-announce and checks it said the file, the line and "expected 21.60 but got 18.40";
+- runs Fix it the way ⌘⌥⇧F does and checks only `shop.py` changed;
+- checks the test passes, undoes the fix, and checks the test fails again.
+
+Then it closes its window and prints a table of every step: PASS or FAIL, the time taken, what was spoken, the voice engine, and the first-audio time. The exit code is 0 only if every step passes.
+
+- `--muted` (the default): no sound, but speech is still requested from OpenAI, so the timings are real.
+- `--speak`: play the audio so you can listen.
+- `--no-codex`: apply the known one-line fix instead of calling Codex, to save quota.
+
+The full log is in `~/.murmur/selftest.log`.
+
 ## Hotkeys
 
 - **⌘⌥⇧M** reads the latest Terminal output. Press it again to stop speech.
