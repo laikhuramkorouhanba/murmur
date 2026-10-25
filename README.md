@@ -129,7 +129,7 @@ Short successful commands can skip the summariser and stay silent or play a soft
 
 ## Development
 
-Two agents build this repo in turns. `AGENTS.md` is the shared brief and project rules. `HANDOFF.md` is the work log for the next agent.
+Built over one weekend with Codex as the main coding agent, a shared project brief and a running handoff log, both kept locally.
 
 ## What's next
 
