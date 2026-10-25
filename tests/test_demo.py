@@ -71,3 +71,95 @@ def test_reset_menu_item_has_a_spoken_label() -> None:
     item = app.MurmurApp().reset_demo_item
 
     assert str(item._menuitem.accessibilityLabel()).startswith("Reset demo project:")
+
+
+# --- Demo mode ---------------------------------------------------------------------
+
+
+@pytest.fixture
+def demo_project(tmp_path, monkeypatch) -> Path:
+    """A real demo project, built by the real builder, in a test folder."""
+    assert build(tmp_path).returncode == 0
+    project = tmp_path / "murmur-fixme-demo"
+    monkeypatch.setattr(demo, "DEMO_DIR", project)
+    monkeypatch.setattr(demo, "FIX_SECONDS", 0.1)
+    monkeypatch.setattr(demo, "PAUSE_SECONDS", 0.0)
+    monkeypatch.setattr(demo, "reset_demo_project", lambda: (build(tmp_path), demo.RESET_LINE)[1])
+    return project
+
+
+@pytest.fixture
+def heard(monkeypatch) -> list:
+    said = []
+    monkeypatch.setattr(app.voice, "speak", lambda text, **kwargs: said.append(text) or "pre-rendered")
+    monkeypatch.setattr(app.voice, "play_soft_sound", lambda *a: "sound")
+    return said
+
+
+def test_demo_mode_replays_the_recording_through_the_real_pipeline(demo_project, heard) -> None:
+    import threading
+
+    from murmur import captions, settings
+
+    demo.run_demo_mode(threading.Event(), announce=app.announce_last_output)
+
+    assert heard[0] == "Demo mode. This is a replay of a recorded run."
+    assert "it expected 21.60 but got 18.40" in heard[1]
+    assert heard[2] in {*personality_working_cues()}
+    assert "Undo last fix is in the Murmur menu." in heard[3]
+    assert "subtotal + subtotal * tax_rate" in (demo_project / "shop.py").read_text()
+    assert fixer.last_fix() is not None and fixer.last_fix().files == ["shop.py"]
+    assert settings.get("captions") is True  # the room can read along
+
+
+def personality_working_cues() -> set[str]:
+    from murmur import personality
+
+    smooth, focused = personality._FIX_LINES["working"]
+    return {*smooth, focused}
+
+
+def test_undo_after_demo_mode_puts_the_bug_back(demo_project, heard) -> None:
+    import threading
+
+    demo.run_demo_mode(threading.Event(), announce=app.announce_last_output)
+
+    assert fixer.undo_last_fix(say=heard.append)
+    assert demo.demo_project_ready()
+
+
+def test_demo_mode_resets_a_project_that_was_already_fixed(demo_project, heard) -> None:
+    import threading
+
+    (demo_project / "shop.py").write_text("already fixed\n")
+    assert not demo.demo_project_ready()
+
+    demo.run_demo_mode(threading.Event(), announce=app.announce_last_output)
+
+    assert "subtotal + subtotal * tax_rate" in (demo_project / "shop.py").read_text()
+
+
+def test_stopping_demo_mode_early_changes_nothing(demo_project, heard) -> None:
+    import threading
+
+    cancel = threading.Event()
+    cancel.set()
+
+    demo.run_demo_mode(cancel, announce=app.announce_last_output)
+
+    assert heard == ["Demo mode. This is a replay of a recorded run."]
+    assert demo.demo_project_ready()
+
+
+def test_the_recording_is_a_real_failure_and_a_one_file_fix() -> None:
+    recording = demo.load_recording()
+
+    assert "AssertionError: assert Decimal('18.40') == Decimal('21.60')" in recording["output"]
+    assert recording["files"] == ["shop.py"]
+    assert "+    total = subtotal + subtotal * tax_rate" in (demo.RECORDED / "fix.diff").read_text()
+
+
+def test_demo_mode_menu_item_has_a_spoken_label() -> None:
+    label = str(app.MurmurApp().demo_item._menuitem.accessibilityLabel())
+
+    assert label.startswith("Demo mode: replay a recorded failure and fix")

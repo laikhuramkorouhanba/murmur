@@ -66,17 +66,21 @@ def _lookup_folder(tty: str) -> str | None:
     return watcher.tab_folder(tty)
 
 
-def _remember_result(history: str, cleaned: str, failed: bool, tty: str | None) -> None:
+def _remember_result(
+    history: str, cleaned: str, failed: bool, tty: str | None, folder: str | None = None
+) -> None:
     """Keep the details of a failure for Fix it, or forget the old one after a success."""
     if not failed:
         fixer.forget_failure()
         return
-    tty = tty or _lookup_front_tty()
+    if folder is None:  # Demo mode already knows its folder; otherwise ask the tab
+        tty = tty or _lookup_front_tty()
+        # Look up the folder now, while the shell is still sitting in it.
+        folder = _lookup_folder(tty) if tty else None
     fixer.remember_failure(
         fixer.LastFailure(
             tty=tty,
-            # Look up the folder now, while the shell is still sitting in it.
-            folder=_lookup_folder(tty) if tty else None,
+            folder=folder,
             command=watcher.last_command_line(history),
             output=cleaned,
         )
@@ -88,6 +92,7 @@ def announce_last_output(
     *,
     read_text: Callable[[], str] | None = None,
     tty: str | None = None,
+    folder: str | None = None,
 ) -> None:
     """Read, clean, decide, summarise if needed, and speak on a worker thread."""
     cancelled = cancel_event or threading.Event()
@@ -106,7 +111,7 @@ def announce_last_output(
     print(cleaned or "(No output found for the last command.)")
     failed = contains_error(cleaned)
     personality.record_result(failed)
-    _remember_result(history, cleaned, failed, tty)
+    _remember_result(history, cleaned, failed, tty, folder)
     if cancelled.is_set():
         print("Voice engine: none (stopped)")
         print("----- End of Murmur announcement -----")
@@ -426,6 +431,20 @@ def _run_reset_demo_job() -> None:
             _JOB_ACTIVE = False
 
 
+def _run_demo_mode_job() -> None:
+    global _JOB_ACTIVE
+    try:
+        demo.run_demo_mode(_JOB_CANCELLED, announce=announce_last_output)
+    finally:
+        with _JOB_LOCK:
+            _JOB_ACTIVE = False
+
+
+def start_demo_mode() -> bool:
+    """Replay the recorded demo in the background. Any Murmur shortcut stops it."""
+    return _start_background_job(_run_demo_mode_job, "murmur-demo-mode")
+
+
 def start_reset_demo() -> bool:
     """Put the demo project back to its buggy start, in the background."""
     return _start_background_job(_run_reset_demo_job, "murmur-reset-demo")
@@ -640,6 +659,11 @@ class MurmurApp(rumps.App):
         self.diff_item = rumps.MenuItem("Open last fix diff")
 
         self.captions_item = rumps.MenuItem("Show captions", callback=self.toggle_captions)
+        self.demo_item = rumps.MenuItem("Demo mode (replay)", callback=self.demo_mode)
+        _speak_label(
+            self.demo_item,
+            "Demo mode: replay a recorded failure and fix, with captions. No Terminal or internet needed",
+        )
         self.reset_demo_item = rumps.MenuItem("Reset demo project", callback=self.reset_demo)
         _speak_label(self.reset_demo_item, "Reset demo project: put the demo's bug back, ready to fix again")
 
@@ -671,6 +695,7 @@ class MurmurApp(rumps.App):
                 self.tap_menu,
                 self.captions_item,
                 None,
+                self.demo_item,
                 self.reset_demo_item,
                 None,
                 self.key_item,
@@ -697,6 +722,7 @@ class MurmurApp(rumps.App):
         _speak_label(item, label if available else f"{label}. Unavailable: {why_not}")
 
     def show_fix_choices(self) -> None:
+        self._show_captions_choice()  # Demo mode turns captions on from the background
         self._offer(
             self.fix_item,
             self.fix_last_error,
@@ -824,6 +850,9 @@ class MurmurApp(rumps.App):
 
     def read_last_output(self, _sender: object) -> None:
         start_announcement()
+
+    def demo_mode(self, _sender: object) -> None:
+        start_demo_mode()
 
     def reset_demo(self, _sender: object) -> None:
         start_reset_demo()
