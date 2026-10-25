@@ -15,7 +15,7 @@ Murmur is a macOS menu bar companion for blind and low-vision developers. It wat
 - Longer successful output: a pass sound, then "Done, 42 lines."
 - No output: silence.
 
-It speaks through **VoiceOver** when VoiceOver is running (your own voice, rate and braille display), and otherwise through the fast, offline **Mac voice**. The exact output is always one key away.
+It speaks with the fast, offline **Mac voice** (or OpenAI's **Natural voice**, Marin). When VoiceOver is running, auto-announce plays only the pass or fail sound, so Murmur never talks over VoiceOver; double tap Right Command, then Space, to hear Murmur's words. The exact output is always one key away.
 
 Murmur can also ask Codex to fix the most recent failure in its Git project. The change is shown, spoken, and available to undo.
 
@@ -27,7 +27,7 @@ Codex response time varies, so the walkthrough may run longer than 90 seconds.
 2. **0:10** — Open a **new Terminal window**. Go to the Murmur checkout with `cd /path/to/murmur`, then run `bash demo/make_fixme_project.sh`. It recreates `~/murmur-fixme-demo` and gives that folder its own Git repository.
 3. **0:25** — Run the failing pytest command printed by the script. Murmur announces the shop test failure.
 4. **0:35** — Double tap **Right Command**, then press **F** (or press **⌘⌥⇧F**). Murmur asks Codex for a small fix and speaks what changed.
-5. **1:10** — Choose **Open last fix diff**, then **Undo last fix** from the Murmur menu. Run the test again to see the original failure return.
+5. **1:10** — Double tap **Right Command**, then press **U** (or choose **Undo last fix** from the menu). Run the test again to see the original failure return.
 
 ## Install and run
 
@@ -66,9 +66,9 @@ This makes `dist/Murmur.app` with PyInstaller. It runs without a terminal, lives
 
 ### Demo mode and the stage safety net
 
-- **Demo mode (replay)** (menu): replays a real recorded run with no Terminal, internet or Codex needed. It turns captions on and says up front that it is a replay. Then it announces the recorded failure and replays the recorded fix, applying the same one-line change to `~/murmur-fixme-demo` through the normal Fix it code, so **Undo last fix** and **Open last fix diff** work afterwards. Any Murmur shortcut stops it.
-- **Reset demo project** (menu): puts the demo's bug back and makes Murmur forget the old failure and fix. The builder only ever deletes a folder that holds its `.murmur-demo` marker, so a real folder that happens to be called `murmur-fixme-demo` is never touched.
-- **Pre-rendered speech:** for the Natural voice, every scripted line is recorded once in Marin, Brief style, at all four speeds, in `src/murmur/audio/` (16 lines, 64 files, about 10 MB). That covers Demo mode's whole script, the Fix it cues, the "Murmur" key layer cue and the welcome. With the Natural voice, speaking tries a recording first, then live OpenAI speech, then the macOS voice. Each file is named after a hash of the model, voice, style, speed and exact words, so a changed line is never played from an old recording. VoiceOver and the Mac voice work offline anyway.
+- **Demo → Demo mode** (menu): replays a real recorded run with no Terminal, internet or Codex needed. It turns captions on and says up front that it is a replay. Then it announces the recorded failure and replays the recorded fix, applying the same one-line change to `~/murmur-fixme-demo` through the normal Fix it code, so **Undo last fix** works afterwards (the diff is saved at `~/.murmur/last_fix.diff`). Any Murmur shortcut stops it.
+- **Demo → Reset demo project** (menu): puts the demo's bug back and makes Murmur forget the old failure and fix. The builder only ever deletes a folder that holds its `.murmur-demo` marker, so a real folder that happens to be called `murmur-fixme-demo` is never touched.
+- **Pre-rendered speech:** for the Natural voice, every scripted line is recorded once in Marin, Brief style, at the default speed, in `src/murmur/audio/` (14 lines, about 1.5 MB). That covers Demo mode's whole script, the Fix it cues, the "Murmur" key layer cue and the welcome. With the Natural voice, speaking tries a recording first, then live OpenAI speech, then the macOS voice. Each file is named after a hash of the model, voice, style, speed and exact words, so a changed line is never played from an old recording. At any other speed the line is spoken live. The Mac voice works offline anyway.
   - `uv run python -m murmur.prerender --check` lists any missing lines.
   - `uv run python -m murmur.prerender --prune` renders them and removes unused files.
 - **The recording:** `demo/recorded/` holds one real run (the failing output, the fix's answer and its exact diff). Make a new one with `uv run python demo/record_demo.py`. That calls Codex once.
@@ -100,7 +100,7 @@ The full log is in `~/.murmur/selftest.log`.
 
 ## Keys
 
-**The Murmur keys.** Double tap **Right Command** (or Right Option or Right Shift, from the **Double-tap key** menu). Murmur says "Murmur" and waits about 3 seconds for one key:
+**The Murmur keys.** Double tap **Right Command**. Murmur says "Murmur" and waits about 3 seconds for one key:
 
 | Key | Does |
 | --- | --- |
@@ -109,6 +109,7 @@ The full log is in `~/.murmur/selftest.log`.
 | F | Fix the last error with Codex (press again to cancel) |
 | U | Undo the last fix |
 | Escape | Cancel and stop speech |
+| Up / Down arrow | One step faster / slower, said as "Faster" or "Slower" at the new speed (press as often as you like) |
 
 That key never reaches Terminal. Any other key closes the layer and is typed as normal. How it's kept from Terminal: Murmur makes a key-swallowing event tap at startup but keeps it switched off. It's switched on only while the layer waits for its key, so the rest of the time your typing never waits for Murmur.
 
@@ -118,32 +119,24 @@ That key never reaches Terminal. Any other key closes the layer and is typed as 
 
 ## Auto-announce
 
-The **Auto-announce** menu: **Off**, **Errors only**, **Errors and short output** (the default) or **Everything**.
+**Auto-announce** in the menu is a single on/off switch (on by default):
 
-| Finished command | Errors only | Errors and short output | Everything |
-| --- | --- | --- | --- |
-| An error | announced | announced | announced |
-| No output | silent | silent | silent |
-| No output, ran 15 s or more | "Done." | "Done." | "Done." |
-| Up to about 10 lines | pass sound (silent under 2 s) | read word for word | read word for word |
-| Longer | pass sound | "Done, 42 lines." | read word for word |
+| Finished command | Murmur does |
+| --- | --- |
+| An error | fail sound, then "Failed. file, line, exact cause." |
+| Up to about 10 lines of output | pass sound, then the output word for word |
+| Longer output | pass sound, then "Done, 42 lines." |
+| No output | silent ("Done." if it ran 15 s or more) |
+| Anything, while VoiceOver is running | just the pass or fail sound |
 
 The pass sound is two quick notes going up; the fail sound is two lower notes going down. One plays before any announcement.
 
 ## Voice, speed and style
 
-- **Voice:** **VoiceOver** (the default while VoiceOver is running: your own voice, rate and braille display, and VoiceOver users get the real file name, like `shop_demo_check.py`, for braille), **Mac voice** (the default otherwise: fast and offline), or **Natural voice: Marin** or **Cedar** (OpenAI, needs a key and the internet). If you pick VoiceOver and it's off, the Mac voice speaks instead.
-- **Speed:** Normal, Fast (the default), Very fast, Maximum. Measured, not guessed:
-
-  | Speed | Mac voice (`say -r`, words per minute) | Natural voice (OpenAI `speed`) |
-  | --- | --- | --- |
-  | Normal | 200 | 1.0 |
-  | Fast | 300 | 1.5 |
-  | Very fast | 380 | 2.0 |
-  | Maximum | 450 (the Mac voice stops getting faster at about 400) | 3.0 (OpenAI allows up to 4; above 3 it gains little) |
-
-  VoiceOver keeps its own rate, set in VoiceOver.
-- **Style:** **Brief** (the default) says the status word first, then the file, line and exact cause. **Friendly** adds a warm opener and closer.
+- **Voice:** **Mac voice** (the default: fast and offline) or **Natural voice** (OpenAI's Marin, needs a key and the internet).
+- **Speed:** a slider in the menu (VoiceOver can adjust it: it's named "Speed" and says its value as a percentage). When you let go, Murmur says a short sample at the new speed. It maps onto each voice's real range: the Mac voice from 150 to 420 words a minute (it stops getting faster at about 400), the Natural voice from OpenAI speed 0.8 to 3.0.
+- **Style:** Brief only: the status word first, then the file, line and exact cause.
+- **Pronunciation:** before any speech, names are rewritten so they sound the same every time: README → "read me", `.py` → "dot pie", `.md` → "dot M D", underscores → spaces, plus common ones like `pyproject`, `pytest`, `.json`, `.toml` and CamelCase error names. Captions keep the real names.
 
 Murmur remembers these choices in `~/.murmur/settings.json`. If the speakers fail (for example PortAudio error -9986 after headphones change), Murmur restarts audio and tries once more, then uses the Mac voice.
 
@@ -197,7 +190,7 @@ Brief style names the exact cause from the output itself, so most failures need 
 
 - Murmur watches only the selected tab in Terminal.app's front window. VS Code terminals are not supported yet.
 - It judges success from terminal text, not an exit code.
-- VoiceOver doesn't say when it has finished a line, so Murmur waits a guessed time between lines. With a very slow VoiceOver rate, a second line can cut into the first.
+- Murmur doesn't speak through VoiceOver itself (announcements from a menu bar app weren't spoken in a real test), so with VoiceOver on, auto-announce is sounds only.
 - Text alone cannot always tell a Python REPL from a script. Stopping a server with Ctrl-C can look like a failure.
 - OpenAI summaries and speech need a key and network access. Local summary and macOS speech are fallbacks, not equivalent voices.
 - Fix it only works in a Git project and may not find a safe fix. Undo covers the files in its snapshot diff, not an unlimited project history.
