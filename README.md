@@ -2,6 +2,8 @@
 
 > **[PROBLEM STORY PLACEHOLDER — The project owner will write this story.]**
 
+**Built with:** Python, rumps, OpenAI (`gpt-4o-mini-tts`, Marin voice), and Codex CLI for Fix it.
+
 ## What Murmur does
 
 Murmur is a macOS menu bar companion for blind and low-vision developers. It watches the selected tab in Terminal.app, cleans command output, and speaks the useful parts. Quick successes stay quiet. Longer successes get a sound or a short message. Errors get a spoken summary, with the exact output still available in Terminal.
@@ -115,6 +117,10 @@ Short successful commands can skip the summariser and stay silent or play a soft
 - OpenAI summaries and speech need a key and network access. Local summary and macOS speech are fallbacks, not equivalent voices.
 - Fix it only works in a Git project and may not find a safe fix. Undo covers the files in its snapshot diff, not an unlimited project history.
 - Murmur is not packaged as a standalone `.app` yet.
+
+## Development
+
+Two agents build this repo in turns. `AGENTS.md` is the shared brief and project rules. `HANDOFF.md` is the work log for the next agent.
 
 ## What's next
 
