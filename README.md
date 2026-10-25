@@ -8,7 +8,7 @@ Screen reader users hear terminal output one line at a time: every progress bar,
 
 **Built with:** Python, rumps, OpenAI (gpt-4o-mini-tts, Marin voice), and Codex CLI for Fix it.
 
-## Screenshots
+## Menu preview
 
 ![Murmur menu items: Read last result, Read everything, Fix last error, Undo last fix, Voice, Speed, Auto-announce, Show captions, Demo, More and Quit.](assets/screenshots/menu.png)
 
