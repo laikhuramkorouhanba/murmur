@@ -55,6 +55,16 @@ codex login
 
 This makes `dist/Murmur.app` with PyInstaller. It runs without a terminal, lives only in the menu bar (no Dock icon), and writes its log to `~/Library/Logs/Murmur/murmur.log` (**Show log** in the menu). The first time it starts without a key, it asks for your OpenAI API key and keeps it in the macOS Keychain; change it later with **Set OpenAI API key…**. The app never reads `.env`. It is not signed or notarized, so the first time, right-click it and choose **Open**. macOS asks for permissions for Murmur itself, and after each rebuild you may need to turn Murmur off and on again under Accessibility and Input Monitoring.
 
+### Demo mode and the stage safety net
+
+- **Demo mode (replay)** (menu): replays a real recorded run with no Terminal, internet or Codex needed. It turns captions on and says up front that it is a replay. Then it announces the recorded failure and replays the recorded fix, applying the same one-line change to `~/murmur-fixme-demo` through the normal Fix it code, so **Undo last fix** and **Open last fix diff** work afterwards. Any Murmur shortcut stops it.
+- **Reset demo project** (menu): puts the demo's bug back and makes Murmur forget the old failure and fix. The builder only ever deletes a folder that holds its `.murmur-demo` marker, so a real folder that happens to be called `murmur-fixme-demo` is never touched.
+- **Pre-rendered speech:** every scripted line is recorded once in the Marin voice and Smooth style, in `src/murmur/audio/` (47 lines, about 19 MB). That covers Demo mode's whole script, the Fix it cues, the done lines and the welcome. Speaking tries a recording first, then live OpenAI speech, then the macOS voice. Each file is named after a hash of the model, voice, style, speed and exact words, so a changed line is never played from an old recording.
+  - `uv run python -m murmur.prerender --check` lists any missing lines.
+  - `uv run python -m murmur.prerender --prune` renders them and removes unused files.
+- **The recording:** `demo/recorded/` holds one real run (the failing output, the fix's answer and its exact diff). Make a new one with `uv run python demo/record_demo.py`. That calls Codex once.
+- **Rehearse offline:** `uv run python -m murmur.selftest --no-codex --muted --demo-mode` adds a Demo mode run with every OpenAI request blocked. It checks that every line came from a recording, then checks Undo and Reset, and that the macOS voice takes over when both a recording and the network are missing.
+
 ### Self-test
 
 ```sh
