@@ -1,0 +1,20 @@
+ada@macbook murmur % ./demo/make_fixme_project.sh
+Created the Fix it demo at /Users/ada/murmur-fixme-demo
+Run its failing test with: uv run --project "/Users/ada/murmur/demo/.." pytest -q "/Users/ada/murmur-fixme-demo/shop_demo_check.py"
+ada@macbook murmur % source .venv/bin/activate
+(murmur) ada@macbook murmur % cd ~/murmur-fixme-demo && uv run --project ~/murmur pytest -q shop_demo_check.py
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______________________ test_order_total_adds_sales_tax ________________________
+
+    def test_order_total_adds_sales_tax() -> None:
+        items = [(Decimal("20.00"), 1)]
+
+>       assert order_total(items, Decimal("0.08")) == Decimal("21.60")
+E       AssertionError: assert Decimal('18.40') == Decimal('21.60')
+
+shop_demo_check.py:9: AssertionError
+=========================== short test summary info ============================
+FAILED shop_demo_check.py::test_order_total_adds_sales_tax - AssertionError: assert Decimal('18.40') == Decimal('21.60')
+1 failed in 0.10s
+(murmur) ada@macbook murmur-fixme-demo % 

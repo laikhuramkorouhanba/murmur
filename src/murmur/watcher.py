@@ -60,8 +60,12 @@ class TabSnapshot:
     processes: tuple[str, ...]  # like ("login", "-zsh", "python3")
 _TIMEOUT_SECONDS = 5
 # A zsh prompt looks like "user@host folder % " (or just "folder % ").
+# A Python virtual env or conda adds a name in brackets first, like
+# "(murmur) user@host folder % ", so we allow any of those in front too.
 # We match that whole shape, so a "%" inside normal output is not mistaken for a prompt.
-_ZSH_PROMPT = re.compile(r"^(?:[\w.+-]+@[\w.-]+ [^%]*|\S+) %(?P<rest>(?:[ \t].*)?)$")
+_ZSH_PROMPT = re.compile(
+    r"^(?:\([^()\s]+\) )*(?:[\w.+-]+@[\w.-]+ [^%]*|\S+) %(?P<rest>(?:[ \t].*)?)$"
+)
 
 
 def last_command_line(text: str) -> str | None:

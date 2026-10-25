@@ -59,3 +59,25 @@ def test_a_silent_quick_success_keeps_the_failure(monkeypatch) -> None:
     app.announce_finished_command(FinishedCommand("/dev/ttys001", 0.5), read_text=lambda: PASSING)
 
     assert fixer.last_failure() is not None
+
+
+def test_hotkey_announcement_remembers_a_failure_behind_a_virtual_env_prompt(monkeypatch) -> None:
+    """Regression from the live test: ⌘⌥⇧M, then ⌘⌥⇧F said "Nothing to fix"."""
+    from pathlib import Path
+
+    from murmur import app, fixer
+
+    history = (Path(__file__).parent / "samples" / "zsh_venv_prompt.txt").read_text(encoding="utf-8")
+    monkeypatch.setattr(app, "_lookup_front_tty", lambda: "/dev/ttys005")
+    monkeypatch.setattr(app, "_lookup_folder", lambda tty: "/Users/ada/murmur-fixme-demo")
+    monkeypatch.setattr(app, "summarise", lambda text: "One test failed in shop_demo_check.py.")
+    monkeypatch.setattr(app.voice, "speak", lambda *a, **k: "OpenAI")
+
+    app.announce_last_output(read_text=lambda: history)  # the hotkey path: no tty given
+
+    failure = fixer.last_failure()
+    assert failure is not None
+    assert failure.tty == "/dev/ttys005"
+    assert failure.folder == "/Users/ada/murmur-fixme-demo"
+    assert failure.command == "cd ~/murmur-fixme-demo && uv run --project ~/murmur pytest -q shop_demo_check.py"
+    assert "AssertionError" in failure.output
