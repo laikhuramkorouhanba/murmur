@@ -430,3 +430,80 @@ def test_unknown_saved_voice_falls_back_to_marin() -> None:
     voice.settings.set("voice", "robot")
 
     assert voice.current_voice() == "marin"
+
+
+def listen(monkeypatch) -> list:
+    heard: list = []
+    monkeypatch.setattr(voice, "_LISTENERS", [heard.append])
+    return heard
+
+
+def fake_say(monkeypatch) -> None:
+    class FakeProcess:
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(voice.subprocess, "Popen", lambda command, **_kwargs: FakeProcess())
+
+
+def test_listeners_hear_when_speech_starts_and_ends(monkeypatch) -> None:
+    voice.reset_stop()
+    monkeypatch.setattr(config, "OPENAI_API_KEY", None)
+    fake_say(monkeypatch)
+    heard = listen(monkeypatch)
+
+    voice.speak("Two tests failed.")
+
+    assert heard == ["Two tests failed.", None]
+
+
+def test_listeners_hear_the_soft_sound_and_ticks_as_captions(monkeypatch) -> None:
+    voice.reset_stop()
+    monkeypatch.setattr(voice.sounddevice, "RawOutputStream", lambda **kwargs: FakeOutputStream(**kwargs))
+    heard = listen(monkeypatch)
+
+    voice.play_soft_sound()
+    voice.play_soft_sound(voice.TICK_CAPTION)
+
+    assert heard == ["♪ success sound", None, "♪ still working", None]
+
+
+def test_nothing_is_announced_when_speech_is_stopped(monkeypatch) -> None:
+    heard = listen(monkeypatch)
+    voice.stop_speech()
+    try:
+        voice.speak("Never said.")
+        voice.play_soft_sound()
+    finally:
+        voice.reset_stop()
+
+    assert heard == []
+
+
+def test_a_broken_listener_never_stops_the_speech(monkeypatch, capsys) -> None:
+    voice.reset_stop()
+    monkeypatch.setattr(config, "OPENAI_API_KEY", None)
+    fake_say(monkeypatch)
+
+    def broken(_text):
+        raise ValueError("oops")
+
+    monkeypatch.setattr(voice, "_LISTENERS", [broken])
+
+    assert voice.speak("Still spoken.") == "macOS say"
+    assert "a speech listener failed (ValueError: oops)" in capsys.readouterr().out
+
+
+def test_listeners_hear_the_end_even_when_speech_fails(monkeypatch) -> None:
+    voice.reset_stop()
+    monkeypatch.setattr(config, "OPENAI_API_KEY", None)
+    heard = listen(monkeypatch)
+
+    def no_say(*_a, **_k):
+        raise RuntimeError("audio exploded")
+
+    monkeypatch.setattr(voice, "_speak", no_say)
+
+    with pytest.raises(RuntimeError):
+        voice.speak("Boom.")
+    assert heard == ["Boom.", None]  # the caption still clears

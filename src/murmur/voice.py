@@ -6,6 +6,7 @@ import struct
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from typing import Any
 
 import sounddevice
@@ -21,6 +22,28 @@ _ACTIVE_PROCESS: subprocess.Popen[bytes] | None = None
 _ACTIVE_STREAM: Any | None = None
 _CLIENT: Any | None = None
 _CLIENT_LOCK = threading.Lock()
+_LISTENERS: list[Callable[[str | None], None]] = []
+
+SOFT_SOUND_CAPTION = "♪ success sound"
+TICK_CAPTION = "♪ still working"
+
+
+def on_speech(listener: Callable[[str | None], None]) -> None:
+    """Call listener(text) when Murmur starts saying something, and listener(None) when it's done.
+
+    Every way Murmur makes sound goes through here: OpenAI speech, the Mac
+    voice, and the soft sound. The caption window listens to this.
+    """
+    _LISTENERS.append(listener)
+
+
+def _tell_listeners(text: str | None) -> None:
+    for listener in list(_LISTENERS):
+        try:
+            listener(text)
+        except Exception as error:
+            # A broken listener must never stop the speech itself.
+            print(f"Murmur: a speech listener failed ({_explain(error)}).")
 _SECRET_LIKE = re.compile(r"sk-[A-Za-z0-9_\-*.]+")
 
 
@@ -159,10 +182,21 @@ def _tone_bytes() -> bytes:
     return bytes(samples)
 
 
-def play_soft_sound() -> str:
-    """Play a quiet confirmation tone, using speech if audio playback fails."""
+def play_soft_sound(caption: str = SOFT_SOUND_CAPTION) -> str:
+    """Play a quiet confirmation tone, using speech if audio playback fails.
+
+    caption is what the caption window shows, since a sound has no words.
+    """
     if _STOP_EVENT.is_set():
         return "none (stopped)"
+    _tell_listeners(caption)
+    try:
+        return _play_soft_sound()
+    finally:
+        _tell_listeners(None)
+
+
+def _play_soft_sound() -> str:
     stream = None
     try:
         stream = sounddevice.RawOutputStream(
@@ -284,6 +318,14 @@ def speak(
     """Speak text with OpenAI streaming, falling back to the built-in Mac voice."""
     if not text or _STOP_EVENT.is_set():
         return "none (stopped)"
+    _tell_listeners(text)
+    try:
+        return _speak(text, client, mode)
+    finally:
+        _tell_listeners(None)
+
+
+def _speak(text: str, client: Any | None, mode: personality.Mode | str | None) -> str:
     if not config.OPENAI_API_KEY:
         return _say_instead(text, "OPENAI_API_KEY is missing.")
 

@@ -348,7 +348,7 @@ def _say(text: str) -> None:
 def _tick() -> None:
     from murmur import voice
 
-    voice.play_soft_sound()
+    voice.play_soft_sound(voice.TICK_CAPTION)
 
 
 class _Progress:
