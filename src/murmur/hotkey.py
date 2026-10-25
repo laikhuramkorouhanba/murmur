@@ -5,7 +5,7 @@ There are two ways in:
 - tapping one right-hand modifier key twice, quickly (Right Command by default)
 
 And two more: ⌘⌥⇧F asks Codex to fix the last error, and ⌘⌥⇧R reads the
-full output word for word.
+full output word for word. Pressing Control on its own stops speech, like VoiceOver.
 """
 
 import ctypes
@@ -65,8 +65,10 @@ class ShortcutWatcher:
         tap_choice: Callable[[], str] = double_tap_choice,
         on_fix: Callable[[], None] | None = None,
         on_read: Callable[[], None] | None = None,
+        on_stop: Callable[[], None] | None = None,
     ) -> None:
         self._on_activate = on_activate
+        self._on_stop = on_stop
         self._on_fix = on_fix
         self._on_read = on_read
         self._keyboard = keyboard
@@ -107,6 +109,9 @@ class ShortcutWatcher:
 
         name = self._modifier_names.get(key)
         if name:
+            # Control pressed on its own stops speech straight away, the way it does in VoiceOver.
+            if name == "ctrl" and not self._held and self._on_stop is not None:
+                self._on_stop()
             self._held.add(name)
             return
 
@@ -201,6 +206,7 @@ def start_hotkey_listener(
     on_activate: Callable[[], None],
     on_fix: Callable[[], None] | None = None,
     on_read: Callable[[], None] | None = None,
+    on_stop: Callable[[], None] | None = None,
 ) -> Any:
     """Start the shortcuts, or explain exactly which permission is missing."""
     missing = missing_permissions()
@@ -218,6 +224,7 @@ def start_hotkey_listener(
         on_activate,
         on_fix=on_fix,
         on_read=on_read,
+        on_stop=on_stop,
         on_first_event=lambda: print("Murmur hotkey: key events are arriving. Shortcuts are live."),
     )
     listener = keyboard.Listener(on_press=watcher.press, on_release=watcher.release)

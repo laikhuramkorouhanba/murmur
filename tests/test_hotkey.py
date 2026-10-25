@@ -249,3 +249,23 @@ def test_launching_app_name_finds_the_outer_app(monkeypatch) -> None:
     )
 
     assert hotkey.launching_app_name() == "Visual Studio Code"
+
+
+def test_control_on_its_own_stops_speech_like_voiceover() -> None:
+    stops = []
+    watcher = hotkey.ShortcutWatcher(FAKE_KEYBOARD, lambda: None, on_stop=lambda: stops.append(1))
+
+    tap(watcher, FakeKey.ctrl)
+    tap(watcher, FakeKey.ctrl_r)
+
+    assert stops == [1, 1]
+
+
+def test_control_inside_another_shortcut_does_not_stop_speech() -> None:
+    stops = []
+    watcher = hotkey.ShortcutWatcher(FAKE_KEYBOARD, lambda: None, on_stop=lambda: stops.append(1))
+
+    watcher.press(FakeKey.cmd)
+    watcher.press(FakeKey.ctrl)  # ⌘⌃ something: not a stop
+
+    assert stops == []

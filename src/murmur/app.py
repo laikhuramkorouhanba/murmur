@@ -382,6 +382,22 @@ def _start_background_job(
         return True
 
 
+def stop_talking() -> None:
+    """The Control key: stop Murmur's speech now, like VoiceOver does.
+
+    A fix keeps going (only its current line goes quiet), so pressing Control
+    while Codex works never throws the fix away. Anything else (an announcement,
+    Read full output, Demo mode) stops completely.
+    """
+    with _JOB_LOCK:
+        running = _JOB_NAME if _JOB_ACTIVE else None
+        if running is not None and running != "murmur-fix":
+            _JOB_CANCELLED.set()
+            voice.stop_speech()
+            return
+    voice.hush()
+
+
 def start_announcement(*, stop_if_running: bool = False) -> bool:
     """Start one background announcement, optionally stopping the current one."""
     return _start_background_job(
@@ -645,12 +661,14 @@ def start_hotkey() -> bool:
             lambda: start_announcement(stop_if_running=True),
             on_fix=start_fix,
             on_read=lambda: start_read_full(stop_if_running=True),
+            on_stop=stop_talking,
         )
         print(
             f"Murmur hotkey: {hotkey.shortcuts_label()} starts announcements; "
             "press either again to stop speech. "
             f"{config.FIX_HOTKEY_LABEL} asks Codex to fix the last error. "
-            f"{config.READ_HOTKEY_LABEL} reads the full output word for word."
+            f"{config.READ_HOTKEY_LABEL} reads the full output word for word. "
+            "Control stops speech."
         )
         return True
     except Exception as error:

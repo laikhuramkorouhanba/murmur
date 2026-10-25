@@ -18,7 +18,8 @@ from murmur import personality, prerender
 
 
 _SAMPLE_RATE = 22050
-_STOP_EVENT = threading.Event()
+_STOP_EVENT = threading.Event()  # stop everything until the next job starts
+_HUSH_EVENT = threading.Event()  # stop just the current line (Control during a fix)
 _STATE_LOCK = threading.Lock()
 _ACTIVE_PROCESS: subprocess.Popen[bytes] | None = None
 _ACTIVE_STREAM: Any | None = None
@@ -214,7 +215,7 @@ def _set_active_stream(stream: Any | None) -> None:
     global _ACTIVE_STREAM
     with _STATE_LOCK:
         _ACTIVE_STREAM = stream
-        should_stop = stream is not None and _STOP_EVENT.is_set()
+        should_stop = stream is not None and _stopped()
     if should_stop:
         try:
             stream.abort()
@@ -226,7 +227,7 @@ def _set_active_process(process: subprocess.Popen[bytes] | None) -> None:
     global _ACTIVE_PROCESS
     with _STATE_LOCK:
         _ACTIVE_PROCESS = process
-        should_stop = process is not None and _STOP_EVENT.is_set()
+        should_stop = process is not None and _stopped()
     if should_stop:
         try:
             process.terminate()
@@ -234,9 +235,27 @@ def _set_active_process(process: subprocess.Popen[bytes] | None) -> None:
             pass
 
 
+def _stopped() -> bool:
+    return _STOP_EVENT.is_set() or _HUSH_EVENT.is_set()
+
+
+def hush() -> None:
+    """Silence the line playing right now, but let the next one speak.
+
+    The Control key uses this while a fix runs: you can quiet "Fixing." without
+    cancelling Codex, and you'll still hear the result.
+    """
+    _HUSH_EVENT.set()
+    _silence_now()
+
+
 def stop_speech() -> None:
     """Stop the current system voice or audio stream, if there is one."""
     _STOP_EVENT.set()
+    _silence_now()
+
+
+def _silence_now() -> None:
     with _STATE_LOCK:
         process = _ACTIVE_PROCESS
         stream = _ACTIVE_STREAM
@@ -346,6 +365,7 @@ def play_fail_sound() -> str:
 def _play_sound(sound: bytes, caption: str, words_instead: str) -> str:
     if _STOP_EVENT.is_set():
         return "none (stopped)"
+    _HUSH_EVENT.clear()
     _tell_listeners(caption)
     used = "none (stopped)"
     try:
@@ -364,7 +384,7 @@ def _play_tone(sound: bytes, words_instead: str) -> str:
         stream.stop()
         return "sounddevice"
     except Exception as error:
-        if not _STOP_EVENT.is_set():
+        if not _stopped():
             return _say_instead(words_instead, f"the sound could not play ({_explain(error)}).")
         return "none (stopped)"
     finally:
@@ -378,7 +398,7 @@ def _play_tone(sound: bytes, words_instead: str) -> str:
 
 def _speak_with_system_voice(text: str) -> bool:
     """Use the built-in Mac voice so speech still works without the network."""
-    if not text or _STOP_EVENT.is_set():
+    if not text or _stopped():
         return False
     if _MUTED.is_set():
         return True  # pretend it was said
@@ -402,7 +422,7 @@ def _say(text: str) -> str:
     """The Mac voice on purpose (not as a fallback)."""
     if _speak_with_system_voice(text):
         return "macOS say"
-    return "none (stopped)" if _STOP_EVENT.is_set() else "none"
+    return "none (stopped)" if _stopped() else "none"
 
 
 def _post_voiceover_announcement(text: str) -> None:
@@ -440,7 +460,9 @@ def _announce_with_voiceover(text: str) -> str:
         return _say_instead(text, f"VoiceOver couldn't be reached ({_explain(error)}).")
     # Wait about as long as VoiceOver takes, so the next line doesn't cut this one off.
     # Pressing Control stops VoiceOver itself; a Murmur stop ends this wait too.
-    _STOP_EVENT.wait(voiceover_seconds(text))
+    deadline = time.monotonic() + voiceover_seconds(text)
+    while not _stopped() and time.monotonic() < deadline:
+        time.sleep(0.05)
     return "VoiceOver"
 
 
@@ -530,7 +552,7 @@ def _first_audio(client: Any, request: dict[str, Any], requested_at: float) -> _
     hedge_at = requested_at + config.TTS_HEDGE_SECONDS
     attempts = [_Attempt(1, client, request, race)]
     while True:
-        if _STOP_EVENT.is_set():
+        if _stopped():
             race.give_up()
             return None
         if race.winner is not None:
@@ -589,7 +611,7 @@ def _stream_openai_speech(
 
     try:
         for chunk in pieces():
-            if _STOP_EVENT.is_set():
+            if _stopped():
                 return False
             if not chunk:
                 continue
@@ -611,7 +633,7 @@ def _stream_openai_speech(
         # Part of the line already played. Reading it all again with `say` would be
         # more confusing than a short cut, so we stop here and say why in the log.
         print(f"Murmur: OpenAI speech stopped partway ({_explain(error)}); not repeating the line.")
-        return not _STOP_EVENT.is_set()
+        return not _stopped()
     finally:
         winner.close()
         _set_active_stream(None)
@@ -620,7 +642,7 @@ def _stream_openai_speech(
                 output.stop()
             finally:
                 output.close()
-    return not _STOP_EVENT.is_set()
+    return not _stopped()
 
 
 def _play_prerendered(path: Any, text: str) -> str | None:
@@ -645,7 +667,7 @@ def _play_prerendered(path: Any, text: str) -> str | None:
         stream = _open_output(rate)
         step = rate // 10 * 2  # a tenth of a second at a time, so a stop is heard quickly
         for start in range(0, len(frames), step):
-            if _STOP_EVENT.is_set():
+            if _stopped():
                 return "none (stopped)"
             stream.write(frames[start : start + step])
         stream.stop()
@@ -653,7 +675,7 @@ def _play_prerendered(path: Any, text: str) -> str | None:
     except AudioDeviceProblem as error:
         return _say_instead(text, f"{error}")
     except Exception as error:
-        if _STOP_EVENT.is_set():
+        if _stopped():
             return "none (stopped)"
         print(f"Murmur: a pre-rendered line couldn't play ({_explain(error)}); speaking it live instead.")
         return None
@@ -678,6 +700,7 @@ def speak(
     """
     if not text or _STOP_EVENT.is_set():
         return "none (stopped)"
+    _HUSH_EVENT.clear()  # a Control press only silences the line that was playing then
     global _LAST_FIRST_AUDIO, _LAST_ATTEMPT
     _LAST_FIRST_AUDIO, _LAST_ATTEMPT = None, 1
     _tell_listeners(text)
@@ -708,10 +731,10 @@ def _speak(text: str, client: Any | None, mode: personality.Mode | str | None) -
             client = _openai_client()
         if _stream_openai_speech(text, client, mode):
             return "OpenAI"
-        if _STOP_EVENT.is_set():
+        if _stopped():
             return "none (stopped)"
         return _say_instead(text, "OpenAI speech stopped early.")
     except Exception as error:
-        if _STOP_EVENT.is_set():
+        if _stopped():
             return "none (stopped)"
         return _say_instead(text, f"OpenAI speech failed ({_explain(error)}).")
