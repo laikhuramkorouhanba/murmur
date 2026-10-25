@@ -10,13 +10,30 @@ if [[ ! -d "${SOURCE_DIR}" ]]; then
     exit 1
 fi
 
-# This is a disposable demo folder. Remove the old copy so each run starts clean.
+# Safety: only ever delete a folder this script made. It has a .murmur-demo marker
+# (or, for copies made before the marker existed, this script's own first commit).
+is_our_demo() {
+    [[ -d "${DEST_DIR}" && ! -L "${DEST_DIR}" ]] || return 1
+    [[ -f "${DEST_DIR}/.murmur-demo" ]] && return 0
+    [[ -f "${DEST_DIR}/shop_demo_check.py" ]] || return 1
+    local first
+    first="$(git -C "${DEST_DIR}" log --reverse --format=%s 2>/dev/null | head -n 1)"
+    [[ "${first}" == "Create Fix it demo project" ]]
+}
+
 if [[ -e "${DEST_DIR}" || -L "${DEST_DIR}" ]]; then
+    if ! is_our_demo; then
+        printf 'Refusing to delete %s: it was not made by Murmur (no .murmur-demo marker).\n' "${DEST_DIR}" >&2
+        printf 'Move or rename that folder yourself, then run this again.\n' >&2
+        exit 2
+    fi
+    # Our own disposable demo folder: remove the old copy so each run starts clean.
     rm -rf "${DEST_DIR}"
 fi
 
 mkdir -p "${DEST_DIR}"
 cp -R "${SOURCE_DIR}/." "${DEST_DIR}/"
+find "${DEST_DIR}" -name __pycache__ -type d -prune -exec rm -rf {} +  # leftovers from earlier runs
 
 git -C "${DEST_DIR}" init --quiet
 git -C "${DEST_DIR}" add -- .

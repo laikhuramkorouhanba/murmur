@@ -18,7 +18,7 @@ from murmur.decision import (
     has_assertion_cause,
     speech_failure_summary,
 )
-from murmur import captions, fixer, hotkey, keychain, packaged, readout, settings, watcher, welcome
+from murmur import captions, demo, fixer, hotkey, keychain, packaged, readout, settings, watcher, welcome
 from murmur.hotkey import start_hotkey_listener
 from murmur.monitor import AutoAnnouncer, FinishedCommand
 from murmur import personality
@@ -409,6 +409,28 @@ def start_undo() -> bool:
     return _start_background_job(_run_undo_job, "murmur-undo")
 
 
+def _run_reset_demo_job() -> None:
+    global _JOB_ACTIVE
+    try:
+        print("----- Murmur: Reset demo project -----")
+        try:
+            line = demo.reset_demo_project()
+        except demo.DemoProblem as problem:
+            line = str(problem)
+        print(line)
+        engine = voice.speak(line, mode=personality.get_mode())
+        print(f"Voice engine: {engine}")
+        print("----- End of Murmur reset -----")
+    finally:
+        with _JOB_LOCK:
+            _JOB_ACTIVE = False
+
+
+def start_reset_demo() -> bool:
+    """Put the demo project back to its buggy start, in the background."""
+    return _start_background_job(_run_reset_demo_job, "murmur-reset-demo")
+
+
 def open_last_fix_diff() -> bool:
     """Open the last fix's exact change in TextEdit, which VoiceOver reads well."""
     if not fixer.DIFF_PATH.exists():
@@ -618,6 +640,8 @@ class MurmurApp(rumps.App):
         self.diff_item = rumps.MenuItem("Open last fix diff")
 
         self.captions_item = rumps.MenuItem("Show captions", callback=self.toggle_captions)
+        self.reset_demo_item = rumps.MenuItem("Reset demo project", callback=self.reset_demo)
+        _speak_label(self.reset_demo_item, "Reset demo project: put the demo's bug back, ready to fix again")
 
         self.log_item = rumps.MenuItem("Show log", callback=self.show_log)
         _speak_label(self.log_item, "Show log: everything Murmur printed, in TextEdit")
@@ -646,6 +670,8 @@ class MurmurApp(rumps.App):
                 self.voice_menu,
                 self.tap_menu,
                 self.captions_item,
+                None,
+                self.reset_demo_item,
                 None,
                 self.key_item,
                 self.log_item,
@@ -798,6 +824,9 @@ class MurmurApp(rumps.App):
 
     def read_last_output(self, _sender: object) -> None:
         start_announcement()
+
+    def reset_demo(self, _sender: object) -> None:
+        start_reset_demo()
 
     def show_log(self, _sender: object) -> None:
         open_log()
