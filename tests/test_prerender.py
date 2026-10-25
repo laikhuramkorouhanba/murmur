@@ -80,3 +80,14 @@ def test_scripted_lines_cover_the_demo_and_the_fix_cues() -> None:
     assert any("it expected 21.60 but got 18.40" in line for line in lines)
     assert any(line.endswith("Undo last fix is in the Murmur menu.") for line in lines)
     assert len(lines) == len(set(lines))
+
+
+def test_every_scripted_line_has_its_recording(monkeypatch) -> None:
+    """If this fails, a line's wording changed: run `uv run python -m murmur.prerender --prune`."""
+    from pathlib import Path
+
+    import murmur
+
+    monkeypatch.setattr(config, "AUDIO_DIR", Path(murmur.__file__).parent / "audio")
+
+    assert prerender.missing_lines() == []
