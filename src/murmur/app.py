@@ -17,7 +17,7 @@ from murmur.decision import (
     decide,
     speech_failure_summary,
 )
-from murmur import captions, fixer, hotkey, keychain, settings, watcher, welcome
+from murmur import captions, fixer, hotkey, keychain, packaged, settings, watcher, welcome
 from murmur.hotkey import start_hotkey_listener
 from murmur.monitor import AutoAnnouncer, FinishedCommand
 from murmur import personality
@@ -409,6 +409,15 @@ def api_key_status() -> str:
     return "Murmur: no OpenAI API key yet, so speech uses the Mac voice."
 
 
+def open_log() -> bool:
+    """Open Murmur's log in TextEdit. Only the built app writes one; `uv run` prints to the terminal."""
+    if not packaged.LOG_PATH.exists():
+        print("Murmur: there's no log file. With `uv run`, everything prints in the terminal.")
+        return False
+    subprocess.run(["open", "-e", str(packaged.LOG_PATH)], check=False)
+    return True
+
+
 def check_codex_on_startup() -> None:
     """Say up front if Fix it can't work yet, instead of surprising you later."""
     problem = fixer.codex_ready()
@@ -531,6 +540,8 @@ class MurmurApp(rumps.App):
 
         self.captions_item = rumps.MenuItem("Show captions", callback=self.toggle_captions)
 
+        self.log_item = rumps.MenuItem("Show log", callback=self.show_log)
+        _speak_label(self.log_item, "Show log: everything Murmur printed, in TextEdit")
         self.key_item = rumps.MenuItem("Set OpenAI API key…", callback=self.set_api_key)
         _speak_label(self.key_item, "Set OpenAI API key: saved in your Mac's Keychain")
 
@@ -557,6 +568,7 @@ class MurmurApp(rumps.App):
                 self.captions_item,
                 None,
                 self.key_item,
+                self.log_item,
                 self.test_voice_item,
                 self.welcome_item,
             ]
@@ -704,6 +716,9 @@ class MurmurApp(rumps.App):
     def read_last_output(self, _sender: object) -> None:
         start_announcement()
 
+    def show_log(self, _sender: object) -> None:
+        open_log()
+
     def set_api_key(self, _sender: object) -> None:
         ask_for_api_key()
 
@@ -715,6 +730,7 @@ class MurmurApp(rumps.App):
 
 
 def main() -> None:
+    packaged.prepare()  # inside Murmur.app: log file and tool PATH; does nothing with `uv run`
     for warning in config.startup_warnings():
         print(warning, file=sys.stderr)
     print(api_key_status())

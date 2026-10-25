@@ -139,6 +139,8 @@ def launching_app_name() -> str:
     warning has to name it. We walk up the parent processes and keep the
     outermost one that lives inside a ".app" bundle.
     """
+    if config.is_packaged():
+        return "Murmur"  # the built app asks for permissions for itself
     name = None
     pid = os.getppid()
     for _ in range(30):
