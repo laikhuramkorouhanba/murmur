@@ -64,7 +64,7 @@ def test_announcement_speaks_short_output_exactly(monkeypatch, capsys) -> None:
     assert "Voice engine: OpenAI" in output
 
 
-def test_announcement_summarises_errors_and_speaks_the_summary(monkeypatch, capsys) -> None:
+def test_announcement_speaks_an_assertion_failure_without_a_summary_request(monkeypatch, capsys) -> None:
     history = (
         "user@MacBook-Pro murmur % pytest -q\n"
         "FAILED demo/failing_check.py::test_total_includes_the_tip\n"
@@ -84,11 +84,7 @@ def test_announcement_summarises_errors_and_speaks_the_summary(monkeypatch, caps
 
     app.announce_last_output()
 
-    assert summaries == [
-        "FAILED demo/failing_check.py::test_total_includes_the_tip\n"
-        "E       assert 18.0 == 19.8\n"
-        "demo/failing_check.py:6: AssertionError"
-    ]
+    assert summaries == []  # "it expected X but got Y" needs no summary request
     assert (
         "One test failed in failing check dot py, line 6: "
         "it expected 19.8 but got 18." in spoken[0]
@@ -194,3 +190,36 @@ def test_test_voice_menu_action_starts_its_background_job(monkeypatch) -> None:
     app.MurmurApp.test_voice(None, None)
 
     assert starts == [True]
+
+
+def test_assertion_failures_skip_the_summary_request(monkeypatch) -> None:
+    # Found by the self-test: the summary was requested (1-2 s) and then thrown away.
+    from murmur import app
+
+    monkeypatch.setattr(app, "summarise", lambda text: pytest.fail("no summary request needed"))
+    spoken = []
+    monkeypatch.setattr(app.voice, "speak", lambda text, **kwargs: spoken.append(text) or "OpenAI")
+    history = (
+        "shop % pytest -q\n"
+        "E       AssertionError: assert Decimal('18.40') == Decimal('21.60')\n"
+        "shop_demo_check.py:9: AssertionError\n"
+        "1 failed in 0.10s\n"
+        "shop % "
+    )
+
+    app.announce_last_output(read_text=lambda: history)
+
+    assert "it expected 21.60 but got 18.40" in spoken[0]
+
+
+def test_other_errors_are_still_summarised(monkeypatch) -> None:
+    frames = "".join(f'  File "/app/step{n}.py", line {n}, in step{n}\n    step{n + 1}()\n' for n in range(20))
+    output = f"Traceback (most recent call last):\n{frames}ModuleNotFoundError: No module named 'requests'"
+    history = f"shop % python app.py\n{output}\nshop % "
+    summaries = []
+    monkeypatch.setattr(app, "summarise", lambda text: summaries.append(text) or "A module is missing.")
+    monkeypatch.setattr(app.voice, "speak", lambda text, **kwargs: "OpenAI")
+
+    app.announce_last_output(read_text=lambda: history)
+
+    assert len(summaries) == 1 and "No module named 'requests'" in summaries[0]

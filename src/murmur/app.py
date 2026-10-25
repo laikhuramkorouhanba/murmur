@@ -15,6 +15,7 @@ from murmur.decision import (
     auto_action,
     contains_error,
     decide,
+    has_assertion_cause,
     speech_failure_summary,
 )
 from murmur import captions, fixer, hotkey, keychain, packaged, readout, settings, watcher, welcome
@@ -123,9 +124,14 @@ def announce_last_output(
     if action is Action.SPEAK_EXACTLY:
         spoken_text = cleaned
     else:
-        summary = summarise(cleaned)
-        if failed:
-            summary = speech_failure_summary(cleaned, summary)
+        if failed and has_assertion_cause(cleaned):
+            # We can say "it expected X but got Y" ourselves, so skip the summary request:
+            # its answer would be thrown away, and it costs one to two seconds.
+            summary = speech_failure_summary(cleaned, "")
+        else:
+            summary = summarise(cleaned)
+            if failed:
+                summary = speech_failure_summary(cleaned, summary)
         spoken_text = personality.style_summary(summary, failed=failed)
     if cancelled.is_set():
         print("Voice engine: none (stopped)")

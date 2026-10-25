@@ -216,6 +216,11 @@ def fallback_speech_summary(text: str) -> str:
     return f"{lead} because {cause}."
 
 
+def has_assertion_cause(text: str) -> bool:
+    """True when we can say "it expected X but got Y" ourselves, with no summary needed."""
+    return _assertion_cause(text) is not None
+
+
 def speech_failure_summary(text: str, summary: str) -> str:
     """Keep one natural location and the cause, without speaking raw error lines."""
     evidence = find_error_evidence(text)
