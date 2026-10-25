@@ -126,11 +126,23 @@ def test_successes_get_a_varied_closer_too() -> None:
 def test_long_summaries_skip_the_closer() -> None:
     personality.set_mode(personality.Mode.SMOOTH)
     personality.record_result(False)
-    facts = "Two tests failed. The first is in app dot py, line 3."
+    facts = "Two tests failed. The first is in app dot py, line 3. The second is in cart dot py, line 9."
 
     result = personality.style_summary(facts, failed=True)
 
     assert result.endswith(facts)
+
+
+def test_two_sentence_summaries_still_get_a_smooth_closer() -> None:
+    # Found in the live test: a summary plus "The error is in …" sounded flat in Smooth.
+    personality.set_mode(personality.Mode.SMOOTH)
+    personality.record_result(False)
+    facts = "One test failed: the total was 18.40 instead of 21.60. The error is in shop dot py, line 9."
+
+    result = personality.style_summary(facts, failed=True)
+
+    assert facts in result
+    assert any(result.endswith(closer) for closer in personality._PLAYFUL_CLOSERS)
 
 
 def test_done_line_in_each_mode() -> None:

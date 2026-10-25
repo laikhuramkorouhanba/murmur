@@ -11,7 +11,7 @@ from murmur.decision import (
 
 
 SUMMARY_INSTRUCTIONS = """You summarise terminal output for a blind developer who will hear it, not read it.
-Reply in one or two short sentences, plain spoken English, with no markdown. Say first whether the command succeeded or failed.
+Reply in one or two short sentences, plain spoken English, with no markdown. Start with the result itself, like "One test failed" or "The build worked"; never open with a bare "The command failed".
 If it failed, say what failed and explain the actual cause. For an assertion like `assert actual == expected`, say what was expected and what was received.
 Do not include file paths, line numbers, or copy an exact error line; Murmur will add the location naturally after your summary.
 If tests ran, say how many passed and failed. Do not suggest fixes. Do not mention anything that is not in the output."""

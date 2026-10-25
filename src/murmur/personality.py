@@ -98,8 +98,8 @@ def _next_closer(options: tuple[str, ...]) -> str:
 
 
 def _with_closer(text: str, facts: str, options: tuple[str, ...]) -> str:
-    # Only short summaries get a closer, so longer ones don't get even longer.
-    if len(_SENTENCE_BOUNDARY.split(facts.strip())) > 1:
+    # Summaries of up to two sentences get a closer; longer ones don't get even longer.
+    if len(_SENTENCE_BOUNDARY.split(facts.strip())) > 2:
         return text
     return f"{text} {_next_closer(options)}"
 

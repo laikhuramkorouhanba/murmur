@@ -164,3 +164,25 @@ def test_errors_are_always_announced_however_long_they_took(seconds) -> None:
 
 def test_a_long_command_with_no_output_gets_the_done_line() -> None:
     assert auto_action("", 20.0) is AutoAction.DONE_LINE
+
+
+def test_assertion_error_from_a_file_pytest_did_not_rewrite() -> None:
+    # The demo's shop_demo_check.py isn't named test_*.py, so pytest prints
+    # "AssertionError: assert ..." and Decimal('...') values (found in the live test).
+    from murmur.decision import speech_failure_summary
+
+    output = (
+        "F    [100%]\n"
+        "E       AssertionError: assert Decimal('18.40') == Decimal('21.60')\n"
+        "E        +  where Decimal('18.40') = order_total([(Decimal('20.00'), 1)], Decimal('0.08'))\n"
+        "\n"
+        "shop_demo_check.py:9: AssertionError\n"
+        "FAILED shop_demo_check.py::test_order_total_adds_sales_tax - AssertionError: assert Decimal('18.40') == Decimal('21.60')\n"
+        "1 failed in 0.10s"
+    )
+
+    spoken = speech_failure_summary(output, "The command failed. Lots of words.")
+
+    assert "it expected 21.60 but got 18.40" in spoken
+    assert "Decimal" not in spoken
+    assert "The command failed" not in spoken

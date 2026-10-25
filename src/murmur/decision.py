@@ -37,9 +37,12 @@ _ERROR_WORD = re.compile(
     re.IGNORECASE,
 )
 _EXCEPTION_NAME = re.compile(r"\b[A-Za-z_]*(?:Error|Exception)\b")
+# "E   assert 18 == 19.8", or "E   AssertionError: assert ..." when pytest didn't
+# rewrite the test (it only does that for files named like test_*.py).
 _PYTEST_ASSERT = re.compile(
-    r"^\s*E\s+assert\s+(?P<actual>.+?)\s*==\s*(?P<expected>.+?)\s*$"
+    r"^\s*E\s+(?:AssertionError:\s+)?assert\s+(?P<actual>.+?)\s*==\s*(?P<expected>.+?)\s*$"
 )
+_DECIMAL_VALUE = re.compile(r"Decimal\((['\"])(?P<value>[^'\"]+)\1\)")
 _SUCCESS = re.compile(
     r"\b(?:\d+\s+passed|success(?:fully)?|installed|finished|completed|done)\b",
     re.IGNORECASE,
@@ -149,6 +152,9 @@ def _failure_lead(text: str) -> str:
 
 
 def _normalise_value(value: str) -> str:
+    wrapped = _DECIMAL_VALUE.fullmatch(value.strip())
+    if wrapped:
+        return wrapped.group("value")  # Decimal('21.60') is said as written: 21.60
     value = value.strip().strip("'\"")
     try:
         return format(Decimal(value).normalize(), "f")
