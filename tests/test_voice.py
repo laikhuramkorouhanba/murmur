@@ -775,3 +775,16 @@ def test_a_second_audio_failure_uses_the_mac_voice_for_the_line(monkeypatch) -> 
     assert voice.play_fail_sound() == "macOS say"
     assert commands == [["say", "-r", "300", "Failed."]]
 
+
+
+def test_expected_seconds_follow_the_engine_and_speed() -> None:
+    from murmur import settings
+
+    line = "x" * 120
+    settings.set("engine", "mac")
+    settings.set("speed", "fast")
+    assert voice.expected_seconds(line) == pytest.approx(4.0)  # 300 words a minute: 30 characters a second
+    settings.set("speed", "maximum")
+    assert voice.expected_seconds(line) == pytest.approx(3.0)  # say tops out near 40 a second
+    settings.set("engine", "natural")
+    assert voice.expected_seconds(line) == pytest.approx(0.5 + 120 / 26)

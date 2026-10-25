@@ -451,6 +451,28 @@ def voiceover_seconds(text: str) -> float:
     return 0.3 + len(text) * config.VOICEOVER_SECONDS_PER_CHAR
 
 
+def expected_seconds(text: str) -> float:
+    """About how long the next line will take to say, for timing the captions.
+
+    Rates measured on this Mac: `say` speaks about rate / 10 characters a second
+    and tops out near 40; OpenAI speaks about 10 characters a second at speed 1,
+    and about 26 at speed 3.
+    """
+    which = engine()
+    if which == "voiceover":
+        return voiceover_seconds(text)
+    if which == "mac":
+        return len(text) / (min(mac_voice_rate(), 400) / 10)
+    recording = prerender.find(text, current_voice(), None, speed_choice())
+    if recording is not None:
+        try:
+            with wave.open(str(recording), "rb") as audio:
+                return audio.getnframes() / audio.getframerate()
+        except (OSError, EOFError, wave.Error):
+            pass
+    return 0.5 + len(text) / min(10 * natural_speed(), 26)  # plus the wait for the first audio
+
+
 def _announce_with_voiceover(text: str) -> str:
     if _MUTED.is_set():
         return "VoiceOver (muted)"
