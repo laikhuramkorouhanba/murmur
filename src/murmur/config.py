@@ -2,6 +2,7 @@
 
 import os
 import sys
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -28,6 +29,9 @@ def load_api_key() -> tuple[str | None, str | None]:
 
 
 OPENAI_API_KEY, API_KEY_SOURCE = load_api_key()
+
+# Where pre-rendered audio lives. The same path works with `uv run` and inside Murmur.app.
+AUDIO_DIR = Path(__file__).parent / "audio"
 
 
 def use_api_key(key: str, source: str) -> None:
