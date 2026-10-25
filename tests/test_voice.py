@@ -507,3 +507,34 @@ def test_listeners_hear_the_end_even_when_speech_fails(monkeypatch) -> None:
     with pytest.raises(RuntimeError):
         voice.speak("Boom.")
     assert heard == ["Boom.", None]  # the caption still clears
+
+
+def test_muted_still_asks_openai_and_reports_timing_but_plays_nothing(monkeypatch) -> None:
+    voice.reset_stop()
+    monkeypatch.setattr(config, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(voice.sounddevice, "RawOutputStream", lambda **_kwargs: pytest.fail("muted must not play"))
+    reports = []
+    monkeypatch.setattr(voice, "_REPORTERS", [reports.append])
+    speech_create = FakeSpeechCreate(FakeStreamingResponse([b"\x00\x00", b"\x01\x00"]))
+    voice.set_muted(True)
+    try:
+        assert voice.speak("Quiet please.", client=FakeClient(speech_create)) == "OpenAI"
+        assert voice.play_soft_sound() == "sounddevice (muted)"
+    finally:
+        voice.set_muted(False)
+
+    assert speech_create.arguments["input"] == "Quiet please."
+    assert reports[0].text == "Quiet please." and reports[0].engine == "OpenAI"
+    assert reports[0].first_audio_seconds is not None
+    assert reports[1].engine == "sounddevice (muted)"
+
+
+def test_muted_mac_voice_is_not_run(monkeypatch) -> None:
+    voice.reset_stop()
+    monkeypatch.setattr(config, "OPENAI_API_KEY", None)
+    monkeypatch.setattr(voice.subprocess, "Popen", lambda *a, **k: pytest.fail("muted must not run say"))
+    voice.set_muted(True)
+    try:
+        assert voice.speak("Quiet.") == "macOS say"
+    finally:
+        voice.set_muted(False)

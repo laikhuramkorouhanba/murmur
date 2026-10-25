@@ -420,10 +420,14 @@ def fix_last_failure(
     *,
     say: Callable[[str], None] = _say,
     tick: Callable[[], None] = _tick,
-    runner: Callable[..., CodexAnswer] = run_codex,
-    ready: Callable[[], str | None] = codex_ready,
+    runner: Callable[..., CodexAnswer] | None = None,
+    ready: Callable[[], str | None] | None = None,
 ) -> LastFix | None:
     """Ask Codex to fix the last failure, then say what changed. Returns the fix, or None."""
+    # Looked up now, not when Python first read this file, so the self-test's
+    # --no-codex can swap in a known patch for run_codex.
+    runner = runner or run_codex
+    ready = ready or codex_ready
     print("----- Murmur: Fix it -----")
     try:
         return _fix(cancel, say, tick, runner, ready)

@@ -7,6 +7,7 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 import sounddevice
@@ -23,6 +24,39 @@ _ACTIVE_STREAM: Any | None = None
 _CLIENT: Any | None = None
 _CLIENT_LOCK = threading.Lock()
 _LISTENERS: list[Callable[[str | None], None]] = []
+_REPORTERS: list[Callable[["SpeechReport"], None]] = []
+_MUTED = threading.Event()  # still asks OpenAI for speech (so timings are real) but plays nothing
+_LAST_FIRST_AUDIO: float | None = None
+
+
+@dataclass(frozen=True)
+class SpeechReport:
+    """What one line ended up as: the words, who said them, and how fast the sound started."""
+
+    text: str
+    engine: str  # "OpenAI", "macOS say", "sounddevice", "none (stopped)", ...
+    first_audio_seconds: float | None  # only for OpenAI speech
+
+
+def set_muted(muted: bool) -> None:
+    """Muted: OpenAI speech is still requested and timed, but nothing comes out of the speakers."""
+    if muted:
+        _MUTED.set()
+    else:
+        _MUTED.clear()
+
+
+def on_spoken(reporter: Callable[["SpeechReport"], None]) -> None:
+    """Call reporter(SpeechReport) after each line or sound finishes. The self-test uses this."""
+    _REPORTERS.append(reporter)
+
+
+def _report(text: str, engine: str, first_audio: float | None) -> None:
+    for reporter in list(_REPORTERS):
+        try:
+            reporter(SpeechReport(text, engine, first_audio))
+        except Exception as error:
+            print(f"Murmur: a speech reporter failed ({_explain(error)}).")
 
 SOFT_SOUND_CAPTION = "♪ success sound"
 TICK_CAPTION = "♪ still working"
@@ -197,10 +231,13 @@ def play_soft_sound(caption: str = SOFT_SOUND_CAPTION) -> str:
     if _STOP_EVENT.is_set():
         return "none (stopped)"
     _tell_listeners(caption)
+    engine = "none (stopped)"
     try:
-        return _play_soft_sound()
+        engine = "sounddevice (muted)" if _MUTED.is_set() else _play_soft_sound()
+        return engine
     finally:
         _tell_listeners(None)
+        _report(caption, engine, None)
 
 
 def _play_soft_sound() -> str:
@@ -235,6 +272,8 @@ def _speak_with_system_voice(text: str) -> bool:
     """Use the built-in Mac voice so speech still works without the network."""
     if not text or _STOP_EVENT.is_set():
         return False
+    if _MUTED.is_set():
+        return True  # pretend it was said
     process: subprocess.Popen[bytes] | None = None
     try:
         process = subprocess.Popen(
@@ -281,15 +320,20 @@ def _stream_openai_speech(
                 if not got_audio:
                     # If it got here, it arrived in time (the timeout above stops slow waits).
                     # So we always play it: throwing it away only made the silence longer.
-                    print(f"Murmur voice: first audio after {time.monotonic() - requested_at:.1f} s")
-                    output = sounddevice.RawOutputStream(
-                        samplerate=24000,
-                        channels=1,
-                        dtype="int16",
-                    )
-                    _set_active_stream(output)
-                    output.start()
-                    got_audio = True
+                    global _LAST_FIRST_AUDIO
+                    _LAST_FIRST_AUDIO = time.monotonic() - requested_at
+                    print(f"Murmur voice: first audio after {_LAST_FIRST_AUDIO:.1f} s")
+                    if not _MUTED.is_set():
+                        output = sounddevice.RawOutputStream(
+                            samplerate=24000,
+                            channels=1,
+                            dtype="int16",
+                        )
+                        _set_active_stream(output)
+                        output.start()
+                    got_audio = True  # only once the speaker really opened
+                if output is None:
+                    continue  # muted: keep reading so the request finishes normally
                 # Each sample is 2 bytes, so hold back a lonely last byte for the next chunk.
                 chunk = leftover + chunk
                 cut = len(chunk) - len(chunk) % 2
@@ -325,11 +369,16 @@ def speak(
     """Speak text with OpenAI streaming, falling back to the built-in Mac voice."""
     if not text or _STOP_EVENT.is_set():
         return "none (stopped)"
+    global _LAST_FIRST_AUDIO
+    _LAST_FIRST_AUDIO = None
     _tell_listeners(text)
+    engine = "none (stopped)"
     try:
-        return _speak(text, client, mode)
+        engine = _speak(text, client, mode)
+        return engine
     finally:
         _tell_listeners(None)
+        _report(text, engine, _LAST_FIRST_AUDIO)
 
 
 def _speak(text: str, client: Any | None, mode: personality.Mode | str | None) -> str:
