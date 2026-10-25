@@ -27,6 +27,7 @@ _LISTENERS: list[Callable[[str | None], None]] = []
 _REPORTERS: list[Callable[["SpeechReport"], None]] = []
 _MUTED = threading.Event()  # still asks OpenAI for speech (so timings are real) but plays nothing
 _LAST_FIRST_AUDIO: float | None = None
+_LAST_ATTEMPT = 1  # 2 when the second, parallel request won
 
 
 @dataclass(frozen=True)
@@ -290,56 +291,173 @@ def _speak_with_system_voice(text: str) -> bool:
             _set_active_process(None)
 
 
+class _Attempt:
+    """One speech request, opened on its own thread, waiting for its first piece of audio."""
+
+    def __init__(self, number: int, client: Any, request: dict[str, Any], race: "_Race") -> None:
+        self.number = number
+        self.manager: Any | None = None
+        self.chunks: Any | None = None
+        self.first_chunk = b""
+        threading.Thread(
+            target=self._run, args=(client, request, race), name=f"murmur-speech-{number}", daemon=True
+        ).start()
+
+    def _run(self, client: Any, request: dict[str, Any], race: "_Race") -> None:
+        try:
+            self.manager = client.audio.speech.with_streaming_response.create(**request)
+            response = self.manager.__enter__()
+            self.chunks = response.iter_bytes(chunk_size=4096)
+            for chunk in self.chunks:
+                if chunk:
+                    self.first_chunk = chunk
+                    break
+            else:
+                raise TimeoutError("OpenAI returned no speech audio.")
+        except Exception as error:
+            self.close()
+            race.lost(self, error)
+            return
+        if not race.won(self):
+            self.close()  # the other request got there first
+
+    def close(self) -> None:
+        if self.manager is not None:
+            try:
+                self.manager.__exit__(None, None, None)
+            except Exception:
+                pass
+            self.manager = None
+
+
+class _Race:
+    """Up to two identical requests; whichever sends audio first gets played."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._done = threading.Event()
+        self.winner: _Attempt | None = None
+        self.errors: list[BaseException] = []
+        self.started = 0
+        self._closed = False
+
+    def won(self, attempt: _Attempt) -> bool:
+        with self._lock:
+            if self._closed or self.winner is not None:
+                return False
+            self.winner = attempt
+        self._done.set()
+        return True
+
+    def lost(self, attempt: _Attempt, error: BaseException) -> None:
+        with self._lock:
+            self.errors.append(error)
+        self._done.set()  # wake the waiter, so it can start the other request straight away
+
+    def wait(self, seconds: float) -> None:
+        self._done.wait(max(0.0, seconds))
+        self._done.clear()
+
+    def give_up(self) -> None:
+        """Nobody won in time: any request that finishes later just closes itself."""
+        with self._lock:
+            self._closed = True
+
+
+def _first_audio(client: Any, request: dict[str, Any], requested_at: float) -> _Attempt | None:
+    """Ask for speech; if nothing arrives within TTS_HEDGE_SECONDS, ask again in parallel.
+
+    OpenAI usually answers in about half a second, but now and then one request
+    takes many seconds. A second identical request almost always beats it. We
+    play whichever starts first and close the other, so only one is ever heard.
+    Returns None if speech was stopped. Raises if neither started in time.
+    """
+    race = _Race()
+    deadline = requested_at + config.FIRST_AUDIO_TIMEOUT_SECONDS
+    hedge_at = requested_at + config.TTS_HEDGE_SECONDS
+    attempts = [_Attempt(1, client, request, race)]
+    while True:
+        if _STOP_EVENT.is_set():
+            race.give_up()
+            return None
+        if race.winner is not None:
+            return race.winner
+        now = time.monotonic()
+        everyone_failed = len(race.errors) >= len(attempts)
+        if len(attempts) == 1 and (now >= hedge_at or everyone_failed) and now < deadline:
+            print(f"Murmur voice: no audio after {now - requested_at:.1f} s, asking OpenAI again in parallel")
+            attempts.append(_Attempt(2, client, request, race))
+            continue
+        if now >= deadline or (everyone_failed and len(attempts) == 2):
+            race.give_up()
+            if race.winner is not None:  # it just made it
+                return race.winner
+            if race.errors and len(race.errors) >= len(attempts):
+                raise race.errors[-1]
+            raise TimeoutError(
+                f"No speech audio arrived within {config.FIRST_AUDIO_TIMEOUT_SECONDS:g} seconds (asked twice)."
+            )
+        next_check = hedge_at if len(attempts) == 1 else deadline
+        race.wait(min(next_check - now, 0.05))  # short naps, so a stop request is noticed quickly
+
+
 def _stream_openai_speech(
     text: str,
     client: Any,
     mode: personality.Mode | str | None = None,
 ) -> bool:
     """Play raw PCM chunks as soon as the OpenAI response sends them."""
+    global _LAST_FIRST_AUDIO, _LAST_ATTEMPT
     requested_at = time.monotonic()
-    output = None
-    got_audio = False
-    leftover = b""
-    request = client.audio.speech.with_streaming_response.create(
+    request = dict(
         model=config.TTS_MODEL,
         voice=current_voice(),
         input=text,
         instructions=personality.tts_instructions(mode),
-        speed=config.SPEECH_SPEED,
+        speed=personality.speech_speed(mode),
         response_format="pcm",
         timeout=_tts_timeout(),
     )
+    winner = _first_audio(client, request, requested_at)
+    if winner is None:
+        return False  # stopped while waiting
+
+    output = None
+    got_audio = False
+    leftover = b""
+    _LAST_FIRST_AUDIO = time.monotonic() - requested_at
+    _LAST_ATTEMPT = winner.number
+    which = " (second request)" if winner.number == 2 else ""
+    print(f"Murmur voice: first audio after {_LAST_FIRST_AUDIO:.1f} s{which}")
+
+    def pieces():
+        yield winner.first_chunk
+        yield from winner.chunks
 
     try:
-        with request as response:
-            for chunk in response.iter_bytes(chunk_size=4096):
-                if _STOP_EVENT.is_set():
-                    return False
-                if not chunk:
-                    continue
-                if not got_audio:
-                    # If it got here, it arrived in time (the timeout above stops slow waits).
-                    # So we always play it: throwing it away only made the silence longer.
-                    global _LAST_FIRST_AUDIO
-                    _LAST_FIRST_AUDIO = time.monotonic() - requested_at
-                    print(f"Murmur voice: first audio after {_LAST_FIRST_AUDIO:.1f} s")
-                    if not _MUTED.is_set():
-                        output = sounddevice.RawOutputStream(
-                            samplerate=24000,
-                            channels=1,
-                            dtype="int16",
-                        )
-                        _set_active_stream(output)
-                        output.start()
-                    got_audio = True  # only once the speaker really opened
-                if output is None:
-                    continue  # muted: keep reading so the request finishes normally
-                # Each sample is 2 bytes, so hold back a lonely last byte for the next chunk.
-                chunk = leftover + chunk
-                cut = len(chunk) - len(chunk) % 2
-                leftover = chunk[cut:]
-                if cut:
-                    output.write(chunk[:cut])
+        for chunk in pieces():
+            if _STOP_EVENT.is_set():
+                return False
+            if not chunk:
+                continue
+            if not got_audio:
+                if not _MUTED.is_set():
+                    output = sounddevice.RawOutputStream(
+                        samplerate=24000,
+                        channels=1,
+                        dtype="int16",
+                    )
+                    _set_active_stream(output)
+                    output.start()
+                got_audio = True  # only once the speaker really opened
+            if output is None:
+                continue  # muted: keep reading so the request finishes normally
+            # Each sample is 2 bytes, so hold back a lonely last byte for the next chunk.
+            chunk = leftover + chunk
+            cut = len(chunk) - len(chunk) % 2
+            leftover = chunk[cut:]
+            if cut:
+                output.write(chunk[:cut])
     except Exception as error:
         if not got_audio:
             raise  # nothing played yet, so `say` can read the whole line instead
@@ -347,17 +465,15 @@ def _stream_openai_speech(
         # more confusing than a short cut, so we stop here and say why in the log.
         print(f"Murmur: OpenAI speech stopped partway ({_explain(error)}); not repeating the line.")
         return not _STOP_EVENT.is_set()
-    else:
-        if not got_audio and not _STOP_EVENT.is_set():
-            raise TimeoutError("OpenAI returned no speech audio.")
-        return not _STOP_EVENT.is_set()
     finally:
+        winner.close()
         _set_active_stream(None)
         if output is not None:
             try:
                 output.stop()
             finally:
                 output.close()
+    return not _STOP_EVENT.is_set()
 
 
 def speak(
@@ -369,8 +485,8 @@ def speak(
     """Speak text with OpenAI streaming, falling back to the built-in Mac voice."""
     if not text or _STOP_EVENT.is_set():
         return "none (stopped)"
-    global _LAST_FIRST_AUDIO
-    _LAST_FIRST_AUDIO = None
+    global _LAST_FIRST_AUDIO, _LAST_ATTEMPT
+    _LAST_FIRST_AUDIO, _LAST_ATTEMPT = None, 1
     _tell_listeners(text)
     engine = "none (stopped)"
     try:
@@ -378,7 +494,8 @@ def speak(
         return engine
     finally:
         _tell_listeners(None)
-        _report(text, engine, _LAST_FIRST_AUDIO)
+        shown = f"{engine} (2nd req)" if engine == "OpenAI" and _LAST_ATTEMPT == 2 else engine
+        _report(text, shown, _LAST_FIRST_AUDIO)
 
 
 def _speak(text: str, client: Any | None, mode: personality.Mode | str | None) -> str:

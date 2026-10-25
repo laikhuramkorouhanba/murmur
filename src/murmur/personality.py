@@ -5,7 +5,7 @@ import random
 import re
 import threading
 
-from murmur import settings
+from murmur import config, settings
 
 
 class Mode(str, Enum):
@@ -180,13 +180,19 @@ def sample_sentence() -> str:
     return "Murmur voice check is ready."
 
 
+def speech_speed(mode: Mode | str | None = None) -> float:
+    """Smooth talks a little brisker than normal; Focused stays at the normal speed."""
+    selected = Mode(mode) if mode is not None else get_mode()
+    return config.SMOOTH_SPEECH_SPEED if selected is Mode.SMOOTH else config.SPEECH_SPEED
+
+
 def tts_instructions(mode: Mode | str | None = None) -> str:
     """Set a delivery style without asking the voice to change the text."""
     selected = Mode(mode) if mode is not None else get_mode()
     if selected is Mode.SMOOTH:
         return (
-            "Relaxed, warm, a little playful, and unhurried, like a late-night radio host. "
-            "Keep every word clear. Say file names naturally and read line numbers at an easy pace. "
+            "Warm, relaxed and a little playful, like a friendly radio host, at a natural, lively pace. "
+            "Keep every word clear. Say file names naturally and read line numbers clearly. "
             "Do not add words or change the provided text."
         )
     return (

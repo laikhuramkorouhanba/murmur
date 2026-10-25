@@ -50,11 +50,15 @@ TTS_MODEL = "gpt-4o-mini-tts"
 VOICE = "marin"
 # OpenAI voices you can pick in the "Voice" menu.
 VOICES = {"marin": "Marin", "cedar": "Cedar"}
-SPEECH_SPEED = 1.0
+SPEECH_SPEED = 1.0  # Focused; Smooth uses SMOOTH_SPEECH_SPEED
+SMOOTH_SPEECH_SPEED = 1.1
 TTS_CONNECT_TIMEOUT_SECONDS = 2.0  # if Wi-Fi is dead, give up quickly and use the Mac voice
 # How long we wait for OpenAI to send audio. We measured 0.7 to 2.6 s, and on
 # stage more than about 4 s of silence sounds broken, while `say` starts in 0.3 s.
 FIRST_AUDIO_TIMEOUT_SECONDS = 3.5
+# OpenAI sometimes takes many seconds to start one request. If nothing has
+# arrived after this long, a second identical request is sent in parallel.
+TTS_HEDGE_SECONDS = 1.5
 TTS_KEEPALIVE_SECONDS = 120  # keep the connection to OpenAI open this long between lines
 SYSTEM_VOICE_RATE = 180
 

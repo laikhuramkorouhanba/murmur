@@ -1,4 +1,6 @@
 import inspect
+import threading
+import time
 
 import pytest
 
@@ -141,8 +143,9 @@ def test_streams_openai_audio_using_marin_and_configured_speed(monkeypatch) -> N
 
     assert speech_create.arguments["model"] == "gpt-4o-mini-tts"
     assert speech_create.arguments["voice"] == "marin"
-    assert speech_create.arguments["speed"] == 1.0
-    assert "late-night radio host" in speech_create.arguments["instructions"]
+    assert speech_create.arguments["speed"] == 1.1  # Smooth is a little brisker
+    assert "friendly radio host" in speech_create.arguments["instructions"]
+    assert "unhurried" not in speech_create.arguments["instructions"]
     assert speech_create.arguments["response_format"] == "pcm"
     assert output_streams[0].chunks == [b"\x00\x00\x01\x00"]
     assert output_streams[0].closed
@@ -192,20 +195,125 @@ def test_no_audio_falls_back_to_macos_say(monkeypatch) -> None:
     assert commands == [["say", "-r", "180", "No audio arrived."]]
 
 
-def test_audio_that_arrives_slowly_is_still_played(monkeypatch, capsys) -> None:
-    # It used to be thrown away after 5 s, and then `say` started from scratch: even slower.
+class SlowResponse(FakeStreamingResponse):
+    """A response that waits before its first audio, like a slow OpenAI start."""
+
+    def __init__(self, chunks, delay: float, error: Exception | None = None):
+        super().__init__(chunks)
+        self.delay = delay
+        self.error = error
+
+    def iter_bytes(self, chunk_size: int):
+        time.sleep(self.delay)
+        if self.error:
+            raise self.error
+        yield from self.chunks
+
+
+class Requests:
+    """Hands out one prepared response per speech request, and counts the requests."""
+
+    def __init__(self, *responses):
+        self.responses = list(responses)
+        self.count = 0
+
+    def create(self, **arguments):
+        self.count += 1
+        return self.responses.pop(0)
+
+
+@pytest.fixture
+def quick_race(monkeypatch):
+    """Shrink the race: second request after 0.1 s, give up at 0.6 s."""
     voice.reset_stop()
     monkeypatch.setattr(config, "OPENAI_API_KEY", "test-key")
-    times = iter((0.0, 3.4))
-    monkeypatch.setattr(voice.time, "monotonic", lambda: next(times))
+    monkeypatch.setattr(config, "TTS_HEDGE_SECONDS", 0.1)
+    monkeypatch.setattr(config, "FIRST_AUDIO_TIMEOUT_SECONDS", 0.6)
     stream = FakeOutputStream(samplerate=24000, channels=1, dtype="int16")
     monkeypatch.setattr(voice.sounddevice, "RawOutputStream", lambda **_kwargs: stream)
-    client = FakeClient(FakeSpeechCreate(FakeStreamingResponse([b"\x00\x00"])))
+    said = []
 
-    assert voice.speak("Late audio.", client=client) == "OpenAI"
+    class FakeProcess:
+        def wait(self):
+            return 0
 
-    assert stream.chunks == [b"\x00\x00"]
-    assert "Murmur voice: first audio after 3.4 s" in capsys.readouterr().out
+    monkeypatch.setattr(voice.subprocess, "Popen", lambda command, **_kwargs: said.append(command[-1]) or FakeProcess())
+    return stream, said
+
+
+def test_a_quick_start_sends_only_one_request(quick_race) -> None:
+    stream, _ = quick_race
+    requests = Requests(SlowResponse([b"\x01\x00"], delay=0.0))
+
+    assert voice.speak("Fast.", client=FakeClient(requests)) == "OpenAI"
+
+    assert requests.count == 1
+    assert stream.chunks == [b"\x01\x00"]
+
+
+def test_a_slow_start_is_beaten_by_a_second_request(quick_race, capsys) -> None:
+    stream, said = quick_race
+    slow = SlowResponse([b"\x01\x00"], delay=0.5)
+    fast = SlowResponse([b"\x02\x00"], delay=0.0)
+    requests = Requests(slow, fast)
+    reports = []
+    voice.on_spoken(reports.append)
+    try:
+        assert voice.speak("Race.", client=FakeClient(requests)) == "OpenAI"
+    finally:
+        voice._REPORTERS.remove(reports.append)
+
+    assert requests.count == 2
+    assert stream.chunks == [b"\x02\x00"]  # only the second request was played
+    assert said == []  # no macOS say
+    time.sleep(0.6)
+    assert slow.closed  # the loser was closed when it finally answered
+    out = capsys.readouterr().out
+    assert "asking OpenAI again in parallel" in out and "(second request)" in out
+    assert reports[-1].engine == "OpenAI (2nd req)"
+
+
+def test_if_the_first_request_fails_the_second_starts_at_once(quick_race) -> None:
+    stream, said = quick_race
+    requests = Requests(SlowResponse([], delay=0.0, error=OSError("connection reset")), SlowResponse([b"\x03\x00"], delay=0.0))
+
+    started = time.monotonic()
+    assert voice.speak("Retry.", client=FakeClient(requests)) == "OpenAI"
+
+    assert time.monotonic() - started < 0.1  # didn't wait for the 0.1 s mark
+    assert stream.chunks == [b"\x03\x00"] and said == []
+
+
+def test_say_takes_over_only_when_neither_starts_in_time(quick_race) -> None:
+    stream, said = quick_race
+    requests = Requests(SlowResponse([b"\x01\x00"], delay=1.0), SlowResponse([b"\x02\x00"], delay=1.0))
+
+    started = time.monotonic()
+    assert voice.speak("Too slow.", client=FakeClient(requests)) == "macOS say"
+
+    assert 0.55 < time.monotonic() - started < 0.9  # gave up at the 0.6 s limit
+    assert requests.count == 2
+    assert said == ["Too slow."] and stream.chunks == []
+
+
+def test_stopping_during_the_wait_plays_nothing(quick_race) -> None:
+    stream, said = quick_race
+    requests = Requests(SlowResponse([b"\x01\x00"], delay=0.3), SlowResponse([b"\x02\x00"], delay=0.3))
+    threading.Timer(0.05, voice.stop_speech).start()
+
+    assert voice.speak("Stop me.", client=FakeClient(requests)) == "none (stopped)"
+
+    assert stream.chunks == [] and said == []
+    voice.reset_stop()
+
+
+def test_focused_keeps_normal_speed_and_smooth_is_brisker() -> None:
+    from murmur import personality
+
+    assert personality.speech_speed("Smooth") == 1.1
+    assert personality.speech_speed("Focused") == 1.0
+    assert "unhurried" not in personality.tts_instructions("Smooth")
+    assert "warm" in personality.tts_instructions("Smooth").lower()
 
 
 class BreaksPartway(FakeStreamingResponse):
