@@ -207,17 +207,17 @@ def test_undo_with_nothing_to_undo() -> None:
 
 
 def test_summary_skips_the_file_list_when_codex_already_named_the_file() -> None:
-    settings.set("personality", "Focused")
+    settings.set("style", "Brief")
     answer = fixer.CodexAnswer(True, "Changed total in shop.py to add the tip.", True)
 
     text = fixer.spoken_fix_summary(["src/shop.py"], answer)
 
     assert text.count("shop.py") == 1
-    assert text.startswith("Fix applied. Changed total in shop.py")
+    assert text.startswith("Fixed. Changed total in shop.py")
 
 
 def test_summary_keeps_the_file_list_when_codex_did_not_name_every_file() -> None:
-    settings.set("personality", "Focused")
+    settings.set("style", "Brief")
     answer = fixer.CodexAnswer(True, "Fixed the tax maths in shop.py.", False)
 
     text = fixer.spoken_fix_summary(["shop.py", "tax.py"], answer)

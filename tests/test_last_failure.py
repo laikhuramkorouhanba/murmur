@@ -13,7 +13,8 @@ PASSING = "me@mac shop % pytest -q\n3 passed in 0.10s\nme@mac shop % "
 
 def quiet(monkeypatch):
     monkeypatch.setattr(app.voice, "speak", lambda text, **_k: "OpenAI")
-    monkeypatch.setattr(app.voice, "play_soft_sound", lambda: "sounddevice")
+    monkeypatch.setattr(app.voice, "play_pass_sound", lambda: "sounddevice")
+    monkeypatch.setattr(app.voice, "play_fail_sound", lambda: "sounddevice")
     monkeypatch.setattr(app, "summarise", lambda text: "The test failed.")
 
 
@@ -42,7 +43,7 @@ def test_auto_announce_uses_the_tab_that_finished(monkeypatch) -> None:
     assert fixer.last_failure().folder == "/srv/app"
 
 
-def test_an_announced_success_forgets_the_old_failure(monkeypatch) -> None:
+def test_a_passing_rerun_of_the_same_command_forgets_the_old_failure(monkeypatch) -> None:
     quiet(monkeypatch)
     app.announce_last_output(read_text=lambda: FAILING)
     assert fixer.last_failure() is not None
@@ -52,13 +53,18 @@ def test_an_announced_success_forgets_the_old_failure(monkeypatch) -> None:
     assert fixer.last_failure() is None
 
 
-def test_a_silent_quick_success_keeps_the_failure(monkeypatch) -> None:
+def test_other_commands_after_a_failure_keep_it_for_fix_it(monkeypatch) -> None:
+    # Short output is read aloud now, so looking around with ls must not make Fix it forget.
     quiet(monkeypatch)
     app.announce_last_output(read_text=lambda: FAILING)
 
-    app.announce_finished_command(FinishedCommand("/dev/ttys001", 0.5), read_text=lambda: PASSING)
-
+    app.announce_finished_command(
+        FinishedCommand("/dev/ttys001", 0.5), read_text=lambda: "me@mac shop % ls\nshop.py\nme@mac shop % "
+    )
     assert fixer.last_failure() is not None
+
+    app.announce_finished_command(FinishedCommand("/dev/ttys001", 0.5), read_text=lambda: PASSING)
+    assert fixer.last_failure() is None  # the same pytest command passes now
 
 
 def test_hotkey_announcement_remembers_a_failure_behind_a_virtual_env_prompt(monkeypatch) -> None:

@@ -22,52 +22,95 @@ def quiet_audio(monkeypatch):
     heard = {"spoken": [], "sounds": 0}
     monkeypatch.setattr(app.voice, "speak", lambda text, **_k: (heard["spoken"].append(text) or "OpenAI"))
 
-    def sound():
-        heard["sounds"] += 1
-        return "sounddevice"
+    def sound(kind):
+        def play():
+            heard["sounds"] += 1
+            heard.setdefault("order", []).append(kind)
+            return "sounddevice"
 
-    monkeypatch.setattr(app.voice, "play_soft_sound", sound)
+        return play
+
+    monkeypatch.setattr(app.voice, "play_pass_sound", sound("pass"))
+    monkeypatch.setattr(app.voice, "play_fail_sound", sound("fail"))
     monkeypatch.setattr(app, "summarise", lambda text: "The test failed.")
     yield heard
-    personality.set_mode(personality.Mode.SMOOTH)
+    personality.set_mode(personality.Mode.BRIEF)
 
 
 def run(text: str, seconds: float) -> None:
     app.announce_finished_command(FinishedCommand("/dev/ttys001", seconds), read_text=lambda: text)
 
 
-def test_quick_success_is_silent(quiet_audio) -> None:
+LS = "me@mac proj % ls\nREADME.md\tshop.py\tshop_demo_check.py\nme@mac proj % "
+LONG = "me@mac proj % make\n" + "\n".join(f"compiled part {n}" for n in range(30)) + "\nme@mac proj % "
+NOTHING = "me@mac proj % cd src\nme@mac proj % "
+
+
+def test_short_success_is_read_word_for_word_after_the_pass_sound(quiet_audio) -> None:
+    run(LS, 0.3)
+
+    assert quiet_audio["spoken"] == ["README.md\tshop.py\tshop_demo_check.py"]
+    assert quiet_audio["order"] == ["pass"]
+
+
+def test_a_passing_test_run_is_read_too(quiet_audio) -> None:
     run(PASSING, 1.0)
+
+    assert quiet_audio["spoken"] == ["3 passed in 0.10s"]
+
+
+def test_long_success_says_how_many_lines(quiet_audio) -> None:
+    run(LONG, 3.0)
+
+    assert quiet_audio["spoken"] == ["Done, 30 lines."]
+    assert quiet_audio["sounds"] == 1
+
+
+def test_no_output_stays_silent(quiet_audio) -> None:
+    run(NOTHING, 0.2)
 
     assert quiet_audio == {"spoken": [], "sounds": 0}
 
 
-def test_medium_success_plays_only_the_soft_sound(quiet_audio) -> None:
-    run(PASSING, 5.0)
+def test_a_long_command_with_no_output_says_done(quiet_audio) -> None:
+    run(NOTHING, 40.0)
 
-    assert quiet_audio == {"spoken": [], "sounds": 1}
-
-
-def test_long_success_says_one_short_done_line(quiet_audio) -> None:
-    personality.set_mode(personality.Mode.FOCUSED)
-
-    run(PASSING, 40.0)
-
-    assert quiet_audio == {"spoken": ["Done, no errors."], "sounds": 0}
+    assert quiet_audio["spoken"] == ["Done."]
 
 
-def test_long_success_in_smooth_mode_uses_a_smooth_line(quiet_audio) -> None:
-    run(PASSING, 40.0)
+def test_errors_only_keeps_successes_to_the_pass_sound(quiet_audio) -> None:
+    settings.set("auto_detail", "errors")
 
-    assert quiet_audio["spoken"][0] in personality._SMOOTH_DONE_LINES
+    run(LS, 0.3)
+    assert quiet_audio == {"spoken": [], "sounds": 0}  # quick: silent
+
+    run(LONG, 5.0)
+    assert quiet_audio["spoken"] == [] and quiet_audio["sounds"] == 1
+
+
+def test_everything_reads_long_output_too(quiet_audio) -> None:
+    settings.set("auto_detail", "everything")
+
+    run(LONG, 3.0)
+
+    assert "compiled part 0" in quiet_audio["spoken"][0] and "compiled part 29" in quiet_audio["spoken"][-1]
+
+
+def test_friendly_long_success_gets_an_opener(quiet_audio) -> None:
+    personality.set_mode(personality.Mode.FRIENDLY)
+
+    run(LONG, 3.0)
+
+    assert "Done, 30 lines." in quiet_audio["spoken"][0]
+    assert quiet_audio["spoken"][0] != "Done, 30 lines."
 
 
 @pytest.mark.parametrize("seconds", [1.0, 30.0])
 def test_a_failure_gets_the_full_announcement(quiet_audio, capsys, seconds) -> None:
     run(FAILING, seconds)
 
-    assert len(quiet_audio["spoken"]) == 1
-    assert "line 6" in quiet_audio["spoken"][0]
+    assert quiet_audio["spoken"] == ["Failed. failing check dot py, line 6. Expected 19.8, got 18."]
+    assert quiet_audio["order"] == ["fail"]
     assert "demo/failing_check.py:6: AssertionError" in capsys.readouterr().out
 
 
@@ -77,7 +120,7 @@ def test_closed_tab_is_reported_without_speaking(quiet_audio, capsys) -> None:
 
     app.announce_finished_command(FinishedCommand("/dev/ttys001", 9.0), read_text=closed)
 
-    assert quiet_audio == {"spoken": [], "sounds": 0}
+    assert quiet_audio["spoken"] == [] and quiet_audio["sounds"] == 0
     assert "closed before Murmur could read it" in capsys.readouterr().out
 
 

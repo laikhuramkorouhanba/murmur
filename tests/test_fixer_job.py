@@ -29,7 +29,7 @@ def repo(tmp_path: Path) -> Path:
 @pytest.fixture(autouse=True)
 def focused_mode() -> None:
     # Focused always picks the same words, so the tests can check them exactly.
-    settings.set("personality", "Focused")
+    settings.set("style", "Brief")
 
 
 @pytest.fixture
@@ -73,8 +73,8 @@ def test_a_good_fix_is_spoken_saved_and_remembered(repo: Path, failure, capsys) 
     fix = run(recorder, good_codex)
 
     assert recorder.said == [
-        "Working on a fix.",
-        "Fix applied. Changed shop.py. Changed total to add the tip. "
+        "Fixing.",
+        "Fixed. Changed shop.py. Changed total to add the tip. "
         "The command passes now. Undo last fix is in the Murmur menu.",
     ]
     assert fix is not None and fix.files == ["shop.py"]  # the cache file is left out
@@ -128,7 +128,7 @@ def test_refuses_outside_a_git_project(tmp_path: Path) -> None:
 
     run(recorder, good_codex)
 
-    assert recorder.said == ["No fix made. Fix it only works inside a git project, so every change can be undone."]
+    assert recorder.said == ["Not fixed. Fix it only works inside a git project, so every change can be undone."]
 
 
 def test_a_codex_error_rolls_back_half_made_changes(repo: Path, failure) -> None:
@@ -140,7 +140,7 @@ def test_a_codex_error_rolls_back_half_made_changes(repo: Path, failure) -> None
     recorder = Recorder()
     assert run(recorder, broken_codex) is None
 
-    assert recorder.said == ["No fix made. Codex ran out of time. Nothing was changed."]
+    assert recorder.said == ["Not fixed. Codex ran out of time. Nothing was changed."]
     assert "price - tip" in (repo / "shop.py").read_text()
     assert not (repo / "new_file.py").exists()
     assert fixer.last_fix() is None
@@ -169,7 +169,7 @@ def test_codex_finding_no_safe_fix_leaves_the_project_clean(repo: Path, failure)
     recorder = Recorder()
     run(recorder, unsure_codex)
 
-    assert recorder.said == ["No fix made. The test expects a value I can't work out. Nothing was changed."]
+    assert recorder.said == ["Not fixed. The test expects a value I can't work out. Nothing was changed."]
     assert "price - tip" in (repo / "shop.py").read_text()
 
 
@@ -182,7 +182,7 @@ def test_a_fix_that_only_touched_cache_files_counts_as_no_fix(repo: Path, failur
     recorder = Recorder()
     run(recorder, cache_only_codex)
 
-    assert recorder.said == ["No fix made. Codex didn't change any files. Nothing was changed."]
+    assert recorder.said == ["Not fixed. Codex didn't change any files. Nothing was changed."]
 
 
 def test_progress_cue_ticks_and_one_still_on_it_line(monkeypatch) -> None:
@@ -194,7 +194,7 @@ def test_progress_cue_ticks_and_one_still_on_it_line(monkeypatch) -> None:
     for second in [0, 5, 10, 15, 20, 25, 30, 35, 40, 50, 60]:
         progress(float(second))
 
-    assert recorder.said == ["Working on a fix.", "Still working."]
+    assert recorder.said == ["Fixing.", "Still fixing."]
     assert recorder.ticks == 5  # at 10, 20, 40, 50 and 60 (30 is the "still on it" line instead)
 
 
@@ -232,7 +232,7 @@ def test_file_list_reads_naturally() -> None:
 
 
 def test_smooth_fix_lines_never_repeat_twice_in_a_row() -> None:
-    settings.set("personality", "Smooth")
+    settings.set("style", "Friendly")
     lines = [personality.fix_line("fixed") for _ in range(20)]
 
     assert all(first != second for first, second in zip(lines, lines[1:]))

@@ -60,7 +60,8 @@ def _report(text: str, engine: str, first_audio: float | None) -> None:
         except Exception as error:
             print(f"Murmur: a speech reporter failed ({_explain(error)}).")
 
-SOFT_SOUND_CAPTION = "♪ success sound"
+PASS_SOUND_CAPTION = "♪ pass sound"
+FAIL_SOUND_CAPTION = "♪ fail sound"
 TICK_CAPTION = "♪ still working"
 
 
@@ -96,9 +97,52 @@ def _say_instead(text: str, reason: str) -> str:
 
 
 def current_voice() -> str:
-    """The voice picked in the menu, or Marin if the saved one is unknown."""
+    """The Natural voice picked in the menu, or Marin if the saved one is unknown."""
     chosen = settings.get("voice")
     return chosen if chosen in config.VOICES else config.VOICE
+
+
+def voiceover_running() -> bool:
+    """Ask macOS whether VoiceOver is on right now. Cheap, so we ask before every line."""
+    try:
+        import AppKit
+
+        return bool(AppKit.NSWorkspace.sharedWorkspace().isVoiceOverEnabled())
+    except Exception:
+        return False
+
+
+def chosen_engine() -> str:
+    """What the menu says: "auto", "voiceover", "mac" or "natural"."""
+    chosen = settings.get("engine")
+    return chosen if chosen in config.ENGINES else "auto"
+
+
+def engine() -> str:
+    """Who actually speaks the next line: "voiceover", "mac" or "natural".
+
+    VoiceOver only works while it's running. If it's off, the Mac voice takes
+    over, so you never end up with silence.
+    """
+    chosen = chosen_engine()
+    if chosen in ("auto", "voiceover"):
+        return "voiceover" if voiceover_running() else "mac"
+    return chosen
+
+
+def speed_choice() -> str:
+    chosen = settings.get("speed")
+    return chosen if chosen in config.SPEEDS else settings.DEFAULTS["speed"]
+
+
+def natural_speed() -> float:
+    """OpenAI's speed number for the chosen speed."""
+    return config.NATURAL_SPEEDS[speed_choice()]
+
+
+def mac_voice_rate() -> int:
+    """The Mac voice's words per minute for the chosen speed."""
+    return config.MAC_VOICE_RATES[speed_choice()]
 
 
 def _tts_timeout() -> Any:
@@ -213,53 +257,115 @@ def stop_speech() -> None:
             pass
 
 
-def _tone_bytes() -> bytes:
-    """Make a quiet short tone without an audio file or another package."""
-    frame_count = int(_SAMPLE_RATE * 0.12)
-    fade_frames = int(_SAMPLE_RATE * 0.01)
+class AudioDeviceProblem(Exception):
+    """The speakers wouldn't open, even after restarting the audio system."""
+
+
+def _restart_audio() -> None:
+    # PortAudio (the sound library under sounddevice) remembers the audio devices it
+    # saw at startup. Restarting it makes it look again, for example after headphones
+    # were plugged in or Bluetooth reconnected.
+    try:
+        sounddevice._terminate()
+        sounddevice._initialize()
+    except Exception as error:
+        print(f"Murmur: couldn't restart audio ({_explain(error)}).")
+
+
+def _open_output(rate: int) -> Any:
+    """Open the speakers for 16-bit mono sound, trying once more if the audio device has a hiccup.
+
+    PortAudio error -9986 ("internal error") turned up in a real log. It usually
+    means the output device changed. We restart the audio system and try again
+    once; if that fails too, the caller uses the Mac voice, which has its own audio path.
+    """
+    for attempt in (1, 2):
+        stream = None
+        try:
+            stream = sounddevice.RawOutputStream(samplerate=rate, channels=1, dtype="int16")
+            _set_active_stream(stream)
+            stream.start()
+            return stream
+        except sounddevice.PortAudioError as error:
+            _set_active_stream(None)
+            if stream is not None:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+            if attempt == 2:
+                raise AudioDeviceProblem(f"the audio device failed twice ({_explain(error)}).") from error
+            print(f"Murmur: the audio device had a problem ({_explain(error)}); restarting audio and trying once more.")
+            _restart_audio()
+    raise AssertionError("unreachable")
+
+
+# Two notes going up for a pass, two lower notes going down for a fail: easy to tell apart.
+_PASS_NOTES = ((660.0, 0.07), (990.0, 0.09))
+_FAIL_NOTES = ((330.0, 0.09), (220.0, 0.13))
+
+
+def _tone_bytes(notes: tuple[tuple[float, float], ...] = _PASS_NOTES, *, buzz: bool = False) -> bytes:
+    """Make a short, quiet set of notes without an audio file or another package.
+
+    buzz adds a little roughness (a second harmonic), so the fail sound feels different, not just lower.
+    """
     samples = bytearray()
-    for frame in range(frame_count):
-        fade = min(1.0, frame / fade_frames, (frame_count - frame - 1) / fade_frames)
-        value = int(math.sin(2 * math.pi * 660 * frame / _SAMPLE_RATE) * 2600 * fade)
-        samples.extend(struct.pack("<h", value))
+    fade_frames = int(_SAMPLE_RATE * 0.008)
+    for pitch, seconds in notes:
+        frame_count = int(_SAMPLE_RATE * seconds)
+        for frame in range(frame_count):
+            fade = min(1.0, frame / fade_frames, (frame_count - frame - 1) / fade_frames)
+            angle = 2 * math.pi * pitch * frame / _SAMPLE_RATE
+            wave_value = math.sin(angle) + (0.35 * math.sin(2 * angle) if buzz else 0.0)
+            samples.extend(struct.pack("<h", int(wave_value * 2600 * fade)))
     return bytes(samples)
 
 
-def play_soft_sound(caption: str = SOFT_SOUND_CAPTION) -> str:
-    """Play a quiet confirmation tone, using speech if audio playback fails.
+_SOFT_NOTES = ((660.0, 0.12),)  # one quiet note: Fix it's "still working" tick
+
+
+def play_soft_sound(caption: str = TICK_CAPTION) -> str:
+    """One quiet note, used as Fix it's tick while Codex works.
 
     caption is what the caption window shows, since a sound has no words.
     """
+    return _play_sound(_tone_bytes(_SOFT_NOTES), caption, "Still working.")
+
+
+def play_pass_sound() -> str:
+    """The pass sound: two quick notes going up. Played before speech about a success."""
+    return _play_sound(_tone_bytes(_PASS_NOTES), PASS_SOUND_CAPTION, "Passed.")
+
+
+def play_fail_sound() -> str:
+    """The fail sound: two lower notes going down. Played before speech about an error."""
+    return _play_sound(_tone_bytes(_FAIL_NOTES, buzz=True), FAIL_SOUND_CAPTION, "Failed.")
+
+
+def _play_sound(sound: bytes, caption: str, words_instead: str) -> str:
     if _STOP_EVENT.is_set():
         return "none (stopped)"
     _tell_listeners(caption)
-    engine = "none (stopped)"
+    used = "none (stopped)"
     try:
-        engine = "sounddevice (muted)" if _MUTED.is_set() else _play_soft_sound()
-        return engine
+        used = "sounddevice (muted)" if _MUTED.is_set() else _play_tone(sound, words_instead)
+        return used
     finally:
         _tell_listeners(None)
-        _report(caption, engine, None)
+        _report(caption, used, None)
 
 
-def _play_soft_sound() -> str:
+def _play_tone(sound: bytes, words_instead: str) -> str:
     stream = None
     try:
-        stream = sounddevice.RawOutputStream(
-            samplerate=_SAMPLE_RATE,
-            channels=1,
-            dtype="int16",
-        )
-        _set_active_stream(stream)
-        stream.start()
-        stream.write(_tone_bytes())
+        stream = _open_output(_SAMPLE_RATE)
+        stream.write(sound)
         stream.stop()
         return "sounddevice"
     except Exception as error:
         if not _STOP_EVENT.is_set():
-            return _say_instead(
-                "Command succeeded.", f"the success sound could not play ({_explain(error)})."
-            )
+            return _say_instead(words_instead, f"the sound could not play ({_explain(error)}).")
         return "none (stopped)"
     finally:
         _set_active_stream(None)
@@ -279,7 +385,7 @@ def _speak_with_system_voice(text: str) -> bool:
     process: subprocess.Popen[bytes] | None = None
     try:
         process = subprocess.Popen(
-            ["say", "-r", str(config.SYSTEM_VOICE_RATE), text],
+            ["say", "-r", str(mac_voice_rate()), text],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -290,6 +396,52 @@ def _speak_with_system_voice(text: str) -> bool:
     finally:
         if process is not None:
             _set_active_process(None)
+
+
+def _say(text: str) -> str:
+    """The Mac voice on purpose (not as a fallback)."""
+    if _speak_with_system_voice(text):
+        return "macOS say"
+    return "none (stopped)" if _STOP_EVENT.is_set() else "none"
+
+
+def _post_voiceover_announcement(text: str) -> None:
+    """Ask VoiceOver to say text, in the user's own VoiceOver voice, rate and braille display."""
+    import AppKit
+
+    AppKit.NSAccessibilityPostNotificationWithUserInfo(
+        AppKit.NSApp(),
+        AppKit.NSAccessibilityAnnouncementRequestedNotification,
+        {
+            AppKit.NSAccessibilityAnnouncementKey: text,
+            # High: VoiceOver says it even if it's in the middle of reading something else.
+            AppKit.NSAccessibilityPriorityKey: AppKit.NSAccessibilityPriorityHigh,
+        },
+    )
+
+
+def _on_main_thread(work: Callable[[], None]) -> None:
+    from PyObjCTools import AppHelper
+
+    AppHelper.callAfter(work)  # macOS wants accessibility messages sent from the main thread
+
+
+def voiceover_seconds(text: str) -> float:
+    """Roughly how long VoiceOver takes to say text. It never tells us, so we guess."""
+    return 0.3 + len(text) * config.VOICEOVER_SECONDS_PER_CHAR
+
+
+def _announce_with_voiceover(text: str) -> str:
+    if _MUTED.is_set():
+        return "VoiceOver (muted)"
+    try:
+        _on_main_thread(lambda: _post_voiceover_announcement(text))
+    except Exception as error:
+        return _say_instead(text, f"VoiceOver couldn't be reached ({_explain(error)}).")
+    # Wait about as long as VoiceOver takes, so the next line doesn't cut this one off.
+    # Pressing Control stops VoiceOver itself; a Murmur stop ends this wait too.
+    _STOP_EVENT.wait(voiceover_seconds(text))
+    return "VoiceOver"
 
 
 class _Attempt:
@@ -415,7 +567,7 @@ def _stream_openai_speech(
         voice=current_voice(),
         input=text,
         instructions=personality.tts_instructions(mode),
-        speed=personality.speech_speed(mode),
+        speed=natural_speed(),
         response_format="pcm",
         timeout=_tts_timeout(),
     )
@@ -443,13 +595,7 @@ def _stream_openai_speech(
                 continue
             if not got_audio:
                 if not _MUTED.is_set():
-                    output = sounddevice.RawOutputStream(
-                        samplerate=24000,
-                        channels=1,
-                        dtype="int16",
-                    )
-                    _set_active_stream(output)
-                    output.start()
+                    output = _open_output(24000)  # if the speakers won't open, `say` reads the line
                 got_audio = True  # only once the speaker really opened
             if output is None:
                 continue  # muted: keep reading so the request finishes normally
@@ -477,8 +623,11 @@ def _stream_openai_speech(
     return not _STOP_EVENT.is_set()
 
 
-def _play_prerendered(path: Any) -> str | None:
-    """Play a pre-rendered line. Returns None if the file can't be used, so we go live instead."""
+def _play_prerendered(path: Any, text: str) -> str | None:
+    """Play a pre-rendered line. Returns None if the file can't be used, so we go live instead.
+
+    If the speakers themselves won't work, going live wouldn't help, so the Mac voice says it.
+    """
     global _LAST_FIRST_AUDIO
     started = time.monotonic()
     try:
@@ -493,9 +642,7 @@ def _play_prerendered(path: Any) -> str | None:
         return "pre-rendered"
     stream = None
     try:
-        stream = sounddevice.RawOutputStream(samplerate=rate, channels=1, dtype="int16")
-        _set_active_stream(stream)
-        stream.start()
+        stream = _open_output(rate)
         step = rate // 10 * 2  # a tenth of a second at a time, so a stop is heard quickly
         for start in range(0, len(frames), step):
             if _STOP_EVENT.is_set():
@@ -503,6 +650,8 @@ def _play_prerendered(path: Any) -> str | None:
             stream.write(frames[start : start + step])
         stream.stop()
         return "pre-rendered"
+    except AudioDeviceProblem as error:
+        return _say_instead(text, f"{error}")
     except Exception as error:
         if _STOP_EVENT.is_set():
             return "none (stopped)"
@@ -523,21 +672,30 @@ def speak(
     *,
     mode: personality.Mode | str | None = None,
 ) -> str:
-    """Speak text with OpenAI streaming, falling back to the built-in Mac voice."""
+    """Speak text with the chosen engine: VoiceOver, the Mac voice, or the Natural (OpenAI) voice.
+
+    The Natural voice falls back to the Mac voice whenever OpenAI can't help.
+    """
     if not text or _STOP_EVENT.is_set():
         return "none (stopped)"
     global _LAST_FIRST_AUDIO, _LAST_ATTEMPT
     _LAST_FIRST_AUDIO, _LAST_ATTEMPT = None, 1
     _tell_listeners(text)
-    engine = "none (stopped)"
+    used = "none (stopped)"
     try:
-        # 1. a pre-rendered file, 2. live OpenAI speech, 3. the Mac voice (inside _speak).
-        recording = prerender.find(text, current_voice(), mode)
-        engine = (_play_prerendered(recording) if recording else None) or _speak(text, client, mode)
-        return engine
+        which = engine()
+        if which == "voiceover":
+            used = _announce_with_voiceover(text)
+        elif which == "mac":
+            used = _say(text)
+        else:
+            # 1. a pre-rendered file, 2. live OpenAI speech, 3. the Mac voice (inside _speak).
+            recording = prerender.find(text, current_voice(), mode, speed_choice())
+            used = (_play_prerendered(recording, text) if recording else None) or _speak(text, client, mode)
+        return used
     finally:
         _tell_listeners(None)
-        shown = f"{engine} (2nd req)" if engine == "OpenAI" and _LAST_ATTEMPT == 2 else engine
+        shown = f"{used} (2nd req)" if used == "OpenAI" and _LAST_ATTEMPT == 2 else used
         _report(text, shown, _LAST_FIRST_AUDIO)
 
 

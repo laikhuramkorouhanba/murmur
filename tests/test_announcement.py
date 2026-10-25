@@ -11,39 +11,80 @@ def reset_job_state():
         app._JOB_ACTIVE = False
         app._JOB_CANCELLED.clear()
     voice.reset_stop()
-    personality.set_mode(personality.Mode.SMOOTH)
+    personality.set_mode(personality.Mode.FRIENDLY)
     personality.record_result(False)
     yield
     with app._JOB_LOCK:
         app._JOB_ACTIVE = False
         app._JOB_CANCELLED.clear()
     voice.reset_stop()
-    personality.set_mode(personality.Mode.SMOOTH)
+    personality.set_mode(personality.Mode.FRIENDLY)
     personality.record_result(False)
 
 
-def test_announcement_prints_cleaned_output_and_plays_success_cue(monkeypatch, capsys) -> None:
+def test_announcement_plays_the_pass_sound_then_reads_short_output(monkeypatch, capsys) -> None:
     history = "user@MacBook-Pro murmur % pytest -q\n. [100%]\n1 passed in 0.01s\nuser@MacBook-Pro murmur % "
-    cues = []
+    heard = []
     monkeypatch.setattr(app, "get_terminal_text", lambda: history)
-    monkeypatch.setattr(
-        app.voice,
-        "play_soft_sound",
-        lambda: (cues.append(True) or "sounddevice"),
-    )
+    monkeypatch.setattr(app.voice, "play_pass_sound", lambda: heard.append("pass sound") or "sounddevice")
+    monkeypatch.setattr(app.voice, "speak", lambda text, **_kwargs: heard.append(text) or "macOS say")
 
     app.announce_last_output()
 
-    assert cues == [True]
+    assert heard == ["pass sound", ". [100%]\n1 passed in 0.01s"]
     assert capsys.readouterr().out == (
         "----- Murmur: cleaned terminal output -----\n"
         ". [100%]\n"
         "1 passed in 0.01s\n"
         "----- Murmur: spoken text -----\n"
-        "(none; playing the soft success sound)\n"
-        "Voice engine: sounddevice\n"
+        "(short output, read word for word)\n"
+        "Voice engine: macOS say\n"
         "----- End of Murmur announcement -----\n"
     )
+
+
+def test_a_failure_plays_the_fail_sound_then_speaks_brief_words(monkeypatch) -> None:
+    personality.set_mode(personality.Mode.BRIEF)
+    history = (
+        "me@mac shop % pytest -q\n"
+        "E       AssertionError: assert Decimal('18.40') == Decimal('21.60')\n"
+        "shop_demo_check.py:9: AssertionError\n"
+        "1 failed in 0.10s\n"
+        "me@mac shop % "
+    )
+    heard = []
+    monkeypatch.setattr(app, "summarise", lambda text: pytest.fail("Brief needs no summary here"))
+    monkeypatch.setattr(app.voice, "play_fail_sound", lambda: heard.append("fail sound") or "sounddevice")
+    monkeypatch.setattr(app.voice, "speak", lambda text, **_kwargs: heard.append(text) or "macOS say")
+
+    app.announce_last_output(read_text=lambda: history)
+
+    assert heard == ["fail sound", "Failed. shop demo check dot py, line 9. Expected 21.60, got 18.40."]
+
+
+def test_voiceover_gets_the_real_file_name_for_braille(monkeypatch) -> None:
+    personality.set_mode(personality.Mode.BRIEF)
+    monkeypatch.setattr(app.voice, "engine", lambda: "voiceover")
+    spoken = []
+    monkeypatch.setattr(app.voice, "play_fail_sound", lambda: "sounddevice")
+    monkeypatch.setattr(app.voice, "speak", lambda text, **_kwargs: spoken.append(text) or "VoiceOver")
+    history = "me % python app.py\nTraceback (most recent call last):\n  File \"/srv/app_main.py\", line 3, in <module>\nNameError: name 'x' is not defined\nme % "
+
+    app.announce_last_output(read_text=lambda: history)
+
+    assert spoken == ["Failed. app_main.py, line 3. NameError: name 'x' is not defined"]
+
+
+def test_long_success_says_how_many_lines(monkeypatch) -> None:
+    personality.set_mode(personality.Mode.BRIEF)
+    lines = "\n".join(f"step {n} ok" for n in range(25))
+    spoken = []
+    monkeypatch.setattr(app.voice, "play_pass_sound", lambda: "sounddevice")
+    monkeypatch.setattr(app.voice, "speak", lambda text, **_kwargs: spoken.append(text) or "macOS say")
+
+    app.announce_last_output(read_text=lambda: f"me % make\n{lines}\nme % ")
+
+    assert spoken == ["Done, 25 lines."]
 
 
 def test_announcement_speaks_short_output_exactly(monkeypatch, capsys) -> None:
@@ -163,7 +204,7 @@ def test_hotkey_style_repeat_can_cancel_the_current_job(monkeypatch) -> None:
 
 
 def test_test_voice_uses_the_selected_mode_and_prints_engine(monkeypatch, capsys) -> None:
-    personality.set_mode(personality.Mode.FOCUSED)
+    personality.set_mode(personality.Mode.BRIEF)
     spoken = []
 
     def fake_speak(text, *, mode):
@@ -174,10 +215,10 @@ def test_test_voice_uses_the_selected_mode_and_prints_engine(monkeypatch, capsys
 
     app._run_test_voice_job()
 
-    assert spoken == [("Murmur voice check is ready.", personality.Mode.FOCUSED)]
+    assert spoken == [("Murmur voice check.", personality.Mode.BRIEF)]
     assert capsys.readouterr().out == (
         "----- Murmur: test voice -----\n"
-        "Murmur voice check is ready.\n"
+        "Murmur voice check.\n"
         "Voice engine: OpenAI\n"
         "----- End of Murmur voice test -----\n"
     )

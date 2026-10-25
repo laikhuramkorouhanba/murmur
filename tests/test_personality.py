@@ -3,27 +3,36 @@ from murmur import settings
 from murmur.app import MurmurApp
 
 
-def test_smooth_is_the_default_mode() -> None:
-    personality.set_mode(personality.Mode.SMOOTH)
+def test_brief_is_the_default_style_and_friendly_is_saved() -> None:
+    assert personality.get_mode() is personality.Mode.BRIEF
 
-    assert personality.get_mode() is personality.Mode.SMOOTH
-    assert settings.get("personality") == "Smooth"
+    personality.set_mode(personality.Mode.FRIENDLY)
+
+    assert personality.get_mode() is personality.Mode.FRIENDLY
+    assert settings.get("style") == "Friendly"
+
+
+def test_the_old_smooth_setting_is_ignored() -> None:
+    # Saved by older versions under "personality". Everyone starts on Brief now.
+    settings.PATH.write_text('{"personality": "Smooth"}', encoding="utf-8")
+
+    assert personality.get_mode() is personality.Mode.BRIEF
 
 
 def test_personality_choice_is_loaded_from_saved_settings() -> None:
-    settings.set("personality", "Focused")
+    settings.set("style", "Brief")
 
-    assert personality.get_mode() is personality.Mode.FOCUSED
+    assert personality.get_mode() is personality.Mode.BRIEF
 
 
-def test_unknown_saved_personality_falls_back_to_smooth() -> None:
-    settings.set("personality", "Loud")
+def test_unknown_saved_style_falls_back_to_brief() -> None:
+    settings.set("style", "Loud")
 
-    assert personality.get_mode() is personality.Mode.SMOOTH
+    assert personality.get_mode() is personality.Mode.BRIEF
 
 
 def test_focused_mode_keeps_summary_plain() -> None:
-    personality.set_mode(personality.Mode.FOCUSED)
+    personality.set_mode(personality.Mode.BRIEF)
 
     assert personality.style_summary("One test failed in file dot py, line 6.", failed=True) == (
         "One test failed in file dot py, line 6."
@@ -31,15 +40,15 @@ def test_focused_mode_keeps_summary_plain() -> None:
 
 
 def test_test_voice_sample_is_one_sentence_in_each_mode() -> None:
-    personality.set_mode(personality.Mode.SMOOTH)
+    personality.set_mode(personality.Mode.FRIENDLY)
     assert personality.sample_sentence() == "Ooh, Murmur is ready to roll, cool cat."
 
-    personality.set_mode(personality.Mode.FOCUSED)
-    assert personality.sample_sentence() == "Murmur voice check is ready."
+    personality.set_mode(personality.Mode.BRIEF)
+    assert personality.sample_sentence() == "Murmur voice check."
 
 
 def test_smooth_mode_varies_its_openers_and_keeps_facts_intact() -> None:
-    personality.set_mode(personality.Mode.SMOOTH)
+    personality.set_mode(personality.Mode.FRIENDLY)
     facts = "One test failed in failing check dot py, line 6: it expected 19.8 but got 18."
 
     first = personality.style_summary(facts, failed=True)
@@ -51,7 +60,7 @@ def test_smooth_mode_varies_its_openers_and_keeps_facts_intact() -> None:
 
 
 def test_smooth_becomes_encouraging_after_three_failures() -> None:
-    personality.set_mode(personality.Mode.SMOOTH)
+    personality.set_mode(personality.Mode.FRIENDLY)
     personality.record_result(False)
     for _ in range(3):
         personality.record_result(True)
@@ -67,24 +76,24 @@ def test_smooth_becomes_encouraging_after_three_failures() -> None:
 
 
 def test_menu_selects_and_marks_the_current_mode() -> None:
-    personality.set_mode(personality.Mode.SMOOTH)
+    personality.set_mode(personality.Mode.FRIENDLY)
     app = MurmurApp()
-    menu = app.menu["Personality"]
+    menu = app.menu["Style"]
 
-    assert menu["Smooth"].state == 1
-    assert menu["Focused"].state == 0
+    assert menu["Friendly"].state == 1
+    assert menu["Brief"].state == 0
 
-    app.choose_focused(None)
+    app.choose_brief(None)
 
-    assert personality.get_mode() is personality.Mode.FOCUSED
-    assert settings.get("personality") == "Focused"
-    assert menu["Smooth"].state == 0
-    assert menu["Focused"].state == 1
+    assert personality.get_mode() is personality.Mode.BRIEF
+    assert settings.get("style") == "Brief"
+    assert menu["Friendly"].state == 0
+    assert menu["Brief"].state == 1
 
-    app.choose_smooth(None)
-    assert personality.get_mode() is personality.Mode.SMOOTH
-    assert menu["Smooth"].state == 1
-    assert menu["Focused"].state == 0
+    app.choose_friendly(None)
+    assert personality.get_mode() is personality.Mode.FRIENDLY
+    assert menu["Friendly"].state == 1
+    assert menu["Brief"].state == 0
 
 
 def _split(result: str, openers, closers) -> tuple[str, str]:
@@ -94,7 +103,7 @@ def _split(result: str, openers, closers) -> tuple[str, str]:
 
 
 def test_smooth_never_repeats_an_opener_or_closer_twice_in_a_row() -> None:
-    personality.set_mode(personality.Mode.SMOOTH)
+    personality.set_mode(personality.Mode.FRIENDLY)
     personality.record_result(False)
     seen_openers, seen_closers = [], []
 
@@ -113,7 +122,7 @@ def test_smooth_never_repeats_an_opener_or_closer_twice_in_a_row() -> None:
 
 
 def test_successes_get_a_varied_closer_too() -> None:
-    personality.set_mode(personality.Mode.SMOOTH)
+    personality.set_mode(personality.Mode.FRIENDLY)
     closers = []
     for _ in range(20):
         result = personality.style_summary("All 12 tests passed.", failed=False)
@@ -124,7 +133,7 @@ def test_successes_get_a_varied_closer_too() -> None:
 
 
 def test_long_summaries_skip_the_closer() -> None:
-    personality.set_mode(personality.Mode.SMOOTH)
+    personality.set_mode(personality.Mode.FRIENDLY)
     personality.record_result(False)
     facts = "Two tests failed. The first is in app dot py, line 3. The second is in cart dot py, line 9."
 
@@ -135,7 +144,7 @@ def test_long_summaries_skip_the_closer() -> None:
 
 def test_two_sentence_summaries_still_get_a_smooth_closer() -> None:
     # Found in the live test: a summary plus "The error is in …" sounded flat in Smooth.
-    personality.set_mode(personality.Mode.SMOOTH)
+    personality.set_mode(personality.Mode.FRIENDLY)
     personality.record_result(False)
     facts = "One test failed: the total was 18.40 instead of 21.60. The error is in shop dot py, line 9."
 
@@ -146,11 +155,11 @@ def test_two_sentence_summaries_still_get_a_smooth_closer() -> None:
 
 
 def test_done_line_in_each_mode() -> None:
-    personality.set_mode(personality.Mode.FOCUSED)
-    assert personality.done_line() == "Done, no errors."
+    personality.set_mode(personality.Mode.BRIEF)
+    assert personality.done_line() == "Done."
 
-    personality.set_mode(personality.Mode.SMOOTH)
+    personality.set_mode(personality.Mode.FRIENDLY)
     lines = [personality.done_line() for _ in range(20)]
-    assert all(line in personality._SMOOTH_DONE_LINES for line in lines)
+    assert all(line in personality._FRIENDLY_DONE_LINES for line in lines)
     assert all(a != b for a, b in zip(lines, lines[1:]))
-    assert "All done, smooth as butter." in personality._SMOOTH_DONE_LINES
+    assert "All done, smooth as butter." in personality._FRIENDLY_DONE_LINES

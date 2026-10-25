@@ -104,7 +104,7 @@ def test_demo_mode_replays_the_recording_through_the_real_pipeline(demo_project,
     demo.run_demo_mode(threading.Event(), announce=app.announce_last_output)
 
     assert heard[0] == "Demo mode. This is a replay of a recorded run."
-    assert "it expected 21.60 but got 18.40" in heard[1]
+    assert "Expected 21.60, got 18.40" in heard[1]
     assert heard[2] in {*personality_working_cues()}
     assert "Undo last fix is in the Murmur menu." in heard[3]
     assert "subtotal + subtotal * tax_rate" in (demo_project / "shop.py").read_text()

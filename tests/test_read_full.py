@@ -50,7 +50,7 @@ def test_the_three_letter_shortcuts_never_share_a_key() -> None:
 
 
 def test_reads_every_word_in_focused_style_even_in_smooth_mode(spoken) -> None:
-    settings.set("personality", "Smooth")
+    settings.set("style", "Friendly")
     app._remember_output("FAILED shop_demo_check.py::test_total\nshop.py:9: AssertionError\nassert 18.40 == 21.60")
 
     app.read_full_output()
@@ -58,7 +58,7 @@ def test_reads_every_word_in_focused_style_even_in_smooth_mode(spoken) -> None:
     assert spoken == [
         (
             "FAILED shop_demo_check.py::test_total\nshop.py, line 9: AssertionError\nassert 18.40 == 21.60",
-            personality.Mode.FOCUSED,
+            personality.Mode.BRIEF,
         )
     ]
 
@@ -100,7 +100,7 @@ def test_empty_output_says_so(spoken) -> None:
 
     app.read_full_output()
 
-    assert spoken == [("There's no output to read.", personality.Mode.FOCUSED)]
+    assert spoken == [("There's no output to read.", personality.Mode.BRIEF)]
 
 
 def test_a_terminal_problem_is_spoken(spoken) -> None:
@@ -109,7 +109,7 @@ def test_a_terminal_problem_is_spoken(spoken) -> None:
 
     app.read_full_output(read_text=broken)
 
-    assert spoken == [("Terminal.app is not running.", personality.Mode.FOCUSED)]
+    assert spoken == [("Terminal.app is not running.", personality.Mode.BRIEF)]
 
 
 def test_announcements_remember_the_cleaned_output(monkeypatch) -> None:

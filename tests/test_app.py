@@ -127,14 +127,41 @@ def test_double_tap_menu_saves_the_choice_and_updates_the_label() -> None:
 
 def test_voice_menu_saves_the_choice_and_marks_it() -> None:
     menu_app = app.MurmurApp()
-    assert menu_app.voice_items["marin"].state == 1
+    assert menu_app.voice_items["mac"].state == 1  # VoiceOver is off in tests, so the Mac voice
 
     menu_app.choose_voice("cedar")
 
+    assert app.settings.get("engine") == "natural"
     assert app.settings.get("voice") == "cedar"
     assert app.voice.current_voice() == "cedar"
     assert menu_app.voice_items["cedar"].state == 1
-    assert menu_app.voice_items["marin"].state == 0
+    assert menu_app.voice_items["mac"].state == 0
+    assert menu_app.voice_menu.title == "Voice: Natural voice: Cedar"
+
+    menu_app.choose_voice("voiceover")
+    assert app.settings.get("engine") == "voiceover"
+    assert menu_app.voice_items["voiceover"].state == 1
+    assert menu_app.voice_menu.title == "Voice: VoiceOver (off, so Mac voice)"
+
+
+def test_speed_menu_saves_the_choice_and_marks_it() -> None:
+    menu_app = app.MurmurApp()
+    assert menu_app.speed_items["fast"].state == 1
+    assert menu_app.speed_menu.title == "Speed: Fast"
+
+    menu_app.choose_speed("maximum")
+
+    assert app.settings.get("speed") == "maximum"
+    assert menu_app.speed_items["maximum"].state == 1 and menu_app.speed_items["fast"].state == 0
+    assert spoken(menu_app.speed_menu) == "Speed, currently Maximum"
+
+
+def test_speed_menu_says_voiceover_keeps_its_own_rate(monkeypatch) -> None:
+    monkeypatch.setattr(app.voice, "voiceover_running", lambda: True)
+    menu_app = app.MurmurApp()
+
+    assert menu_app.voice_items["voiceover"].state == 1  # the default while VoiceOver runs
+    assert "VoiceOver uses its own rate" in spoken(menu_app.speed_menu)
 
 
 def spoken(item) -> str:
@@ -148,8 +175,15 @@ def test_every_menu_item_has_plain_spoken_words() -> None:
     assert spoken(menu_app.read_item) == (
         "Read last output. Shortcut: Command Option Shift M, or Right Command twice."
     )
-    assert spoken(menu_app.personality_menu) == "Personality, currently Smooth"
-    assert spoken(menu_app.voice_menu) == "Voice, currently Marin"
+    assert spoken(menu_app.personality_menu) == "Style, currently Brief"
+    assert spoken(menu_app.voice_menu) == "Voice, currently Mac voice"
+    assert spoken(menu_app.voice_items["voiceover"]) == (
+        "VoiceOver: your own VoiceOver voice, rate and braille display"
+    )
+    assert spoken(menu_app.voice_items["mac"]) == "Mac voice: fast, works offline"
+    assert spoken(menu_app.personality_items[app.personality.Mode.BRIEF]) == (
+        "Brief: status first, then file, line and exact cause"
+    )
     assert spoken(menu_app.tap_menu) == "Double-tap key, currently Right Command"
     assert spoken(menu_app.test_voice_item) == "Test voice: speak a sample sentence"
     assert spoken(menu_app.welcome_item) == (
@@ -161,17 +195,17 @@ def test_every_menu_item_has_plain_spoken_words() -> None:
 
 def test_submenu_titles_show_the_current_choice_and_follow_changes() -> None:
     menu_app = app.MurmurApp()
-    assert menu_app.voice_menu.title == "Voice: Marin"
+    assert menu_app.voice_menu.title == "Voice: Mac voice"
 
     menu_app.choose_voice("cedar")
     menu_app.choose_double_tap("right_option")
-    menu_app.choose_focused(None)
+    menu_app.choose_friendly(None)
 
-    assert menu_app.voice_menu.title == "Voice: Cedar"
+    assert menu_app.voice_menu.title == "Voice: Natural voice: Cedar"
     assert menu_app.tap_menu.title == "Double-tap key: Right Option"
-    assert menu_app.personality_menu.title == "Personality: Focused"
+    assert menu_app.personality_menu.title == "Style: Friendly"
     assert spoken(menu_app.read_item).endswith("or Right Option twice.")
-    app.personality.set_mode(app.personality.Mode.SMOOTH)
+    app.personality.set_mode(app.personality.Mode.BRIEF)
 
 
 # --- the API key box -------------------------------------------------------

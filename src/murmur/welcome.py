@@ -24,18 +24,17 @@ def welcome_text(
     missing = missing_permissions() if missing is None else missing
     tap = tap or hotkey.double_tap_label()
 
-    if selected is personality.Mode.SMOOTH:
+    if selected is personality.Mode.FRIENDLY:
         intro = "Hey, Murmur here."
         outro = "Let's go, cool cat."
     else:
-        intro = "Welcome to Murmur."
-        outro = "Ready when you are."
+        intro = "Murmur ready."
+        outro = ""
 
     shortcuts = (
-        f"Tap {tap} for results. Backup: {config.HOTKEY_SPOKEN}. "
-        "Repeat either shortcut to stop speech. "
-        f"{config.FIX_HOTKEY_SPOKEN} fixes errors with Codex. "
-        f"{config.READ_HOTKEY_SPOKEN} reads every word."
+        f"Double tap {tap.removesuffix(' twice')}, then Space repeats, R reads all, F fixes, U undoes. "
+        "Control stops speech. "
+        "Backups: Command Option Shift M, F and R."
     )
     permission_notes = []
     if "Automation" in missing:
@@ -53,4 +52,4 @@ def welcome_text(
             f"enable {app} in System Settings → Privacy & Security."
         )
 
-    return " ".join((intro, shortcuts, *permission_notes, outro))
+    return " ".join(part for part in (intro, shortcuts, *permission_notes, outro) if part)

@@ -10,7 +10,7 @@ def reset_job_state():
         app._JOB_CANCELLED.clear()
     voice.reset_stop()
     yield
-    personality.set_mode(personality.Mode.SMOOTH)
+    personality.set_mode(personality.Mode.BRIEF)
 
 
 _STARTED = []
@@ -31,29 +31,23 @@ def run_started_jobs():
         _STARTED.pop(0)()
 
 
-def test_welcome_greets_and_explains_both_shortcuts_without_unneeded_permissions() -> None:
-    text = welcome.welcome_text(personality.Mode.FOCUSED, app_name="Visual Studio Code", missing=[])
+def test_welcome_is_short_and_explains_the_new_defaults() -> None:
+    text = welcome.welcome_text(personality.Mode.BRIEF, app_name="Visual Studio Code", missing=[])
 
-    assert text.startswith("Welcome to Murmur.")
-    assert "Backup: Command Option Shift M" in text
-    assert "Tap Right Command twice" in text
+    assert text == (
+        "Murmur ready. Double tap Right Command, then Space repeats, R reads all, F fixes, U undoes. "
+        "Control stops speech. Backups: Command Option Shift M, F and R."
+    )
     assert "twice twice" not in text
-    assert "Repeat either shortcut to stop speech" in text
-    assert "Command Option Shift F fixes errors with Codex." in text
-    assert "Command Option Shift R reads every word." in text
-    assert "Automation" not in text
-    assert "Accessibility" not in text
-    assert "Input Monitoring" not in text
-    assert len(text.split()) <= 40
-    assert "cool cat" not in text
+    assert len(text.split()) <= 30
 
 
-def test_welcome_follows_the_double_tap_choice_and_personality() -> None:
+def test_welcome_follows_the_double_tap_choice_and_style() -> None:
     settings.set("double_tap_key", "right_shift")
 
-    text = welcome.welcome_text(personality.Mode.SMOOTH, app_name="Terminal", missing=[])
+    text = welcome.welcome_text(personality.Mode.FRIENDLY, app_name="Terminal", missing=[])
 
-    assert "Tap Right Shift twice" in text
+    assert "Double tap Right Shift, then" in text
     assert text.startswith("Hey, Murmur here.")
 
 
@@ -80,7 +74,7 @@ def test_welcome_checks_only_permissions_macos_reports_as_missing(monkeypatch) -
     monkeypatch.setattr(welcome.hotkey, "missing_permissions", lambda: ["Accessibility"])
     monkeypatch.setattr(welcome.watcher, "automation_permission_missing", lambda: False)
 
-    text = welcome.welcome_text(personality.Mode.FOCUSED, app_name="Terminal")
+    text = welcome.welcome_text(personality.Mode.BRIEF, app_name="Terminal")
 
     assert "Missing Accessibility" in text
     assert "Automation" not in text
@@ -91,7 +85,7 @@ def test_welcome_mentions_automation_only_when_apple_events_are_blocked(monkeypa
     monkeypatch.setattr(welcome.hotkey, "missing_permissions", lambda: [])
     monkeypatch.setattr(welcome.watcher, "automation_permission_missing", lambda: True)
 
-    text = welcome.welcome_text(personality.Mode.FOCUSED, app_name="Terminal")
+    text = welcome.welcome_text(personality.Mode.BRIEF, app_name="Terminal")
 
     assert "Missing Automation" in text
     assert "Accessibility" not in text
@@ -108,9 +102,9 @@ def test_welcome_plays_on_first_run_only(monkeypatch, capsys) -> None:
     run_started_jobs()
     assert not app.welcome_if_first_run()
 
-    assert spoken == ["Welcome in Smooth."]
+    assert spoken == ["Welcome in Brief."]
     assert settings.get("welcome_done") is True
-    assert "Welcome in Smooth." in capsys.readouterr().out
+    assert "Welcome in Brief." in capsys.readouterr().out
 
 
 def test_replay_welcome_menu_item_plays_it_again(monkeypatch) -> None:

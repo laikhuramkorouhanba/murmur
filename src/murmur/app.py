@@ -10,12 +10,15 @@ from typing import Any
 from murmur import config, voice
 from murmur.cleaner import clean
 from murmur.decision import (
-    Action,
     AutoAction,
     auto_action,
+    auto_detail,
+    brief_failure,
     contains_error,
-    decide,
     has_assertion_cause,
+    has_exact_cause,
+    is_short_output,
+    line_count_line,
     speech_failure_summary,
 )
 from murmur import captions, demo, fixer, hotkey, keychain, packaged, readout, settings, watcher, welcome
@@ -34,6 +37,7 @@ _JOB_CANCELLED = threading.Event()
 _HOTKEY_LISTENER = None
 _LAST_OUTPUT_LOCK = threading.Lock()
 _LAST_OUTPUT: str | None = None  # the cleaned output of the last command Murmur read
+_LAST_SPOKEN: str | None = None  # the last announcement, for "repeat"
 _AUTO_ANNOUNCER: AutoAnnouncer | None = None
 
 
@@ -69,9 +73,9 @@ def _lookup_folder(tty: str) -> str | None:
 def _remember_result(
     history: str, cleaned: str, failed: bool, tty: str | None, folder: str | None = None
 ) -> None:
-    """Keep the details of a failure for Fix it, or forget the old one after a success."""
+    """Keep the details of a failure for Fix it, or forget it once that same command passes."""
     if not failed:
-        fixer.forget_failure()
+        _forget_failure_if_rerun_passed(history)
         return
     if folder is None:  # Demo mode already knows its folder; otherwise ask the tab
         tty = tty or _lookup_front_tty()
@@ -87,6 +91,48 @@ def _remember_result(
     )
 
 
+def _end(engine: str) -> None:
+    print(f"Voice engine: {engine}")
+    print("----- End of Murmur announcement -----")
+
+
+def failure_words(cleaned: str) -> str:
+    """What to say about a failure, in the chosen style."""
+    if personality.get_mode() is personality.Mode.BRIEF:
+        # VoiceOver also drives braille displays, so it gets the real file names.
+        exact = voice.engine() == "voiceover"
+        # Brief names the exact cause from the output; only a puzzle needs the summary request.
+        summary = "" if has_exact_cause(cleaned) else summarise(cleaned)
+        return brief_failure(cleaned, summary, exact_names=exact)
+    if has_assertion_cause(cleaned):
+        # We can say "it expected X but got Y" ourselves, so skip the summary request:
+        # its answer would be thrown away, and it costs one to two seconds.
+        facts = speech_failure_summary(cleaned, "")
+    else:
+        facts = speech_failure_summary(cleaned, summarise(cleaned))
+    return personality.style_summary(facts, failed=True)
+
+
+def speak_output(cleaned: str, cancelled: threading.Event) -> str:
+    """Read output word for word (paths spelled out clearly), in pieces so a stop works quickly."""
+    engine = "none (stopped)"
+    for piece in readout.pieces(readout.speakable(cleaned)):
+        if cancelled.is_set():
+            return "none (stopped)"
+        # Always Brief: no openers, no jokes, just the words.
+        engine = voice.speak(piece, mode=personality.Mode.BRIEF)
+        _remember_spoken(piece)
+    return engine
+
+
+def _forget_failure_if_rerun_passed(history: str) -> None:
+    """A passing rerun of the failed command means it's fixed. Anything else (ls, cat, git
+    status while you look around) keeps the failure, so Fix it still knows what to fix."""
+    failure = fixer.last_failure()
+    if failure is not None and failure.command and failure.command == watcher.last_command_line(history):
+        fixer.forget_failure()
+
+
 def announce_last_output(
     cancel_event: threading.Event | None = None,
     *,
@@ -94,7 +140,11 @@ def announce_last_output(
     tty: str | None = None,
     folder: str | None = None,
 ) -> None:
-    """Read, clean, decide, summarise if needed, and speak on a worker thread."""
+    """Read, clean, decide, and speak on a worker thread (the hotkey, and errors from auto-announce).
+
+    - An error: the fail sound, then "Failed. shop.py, line 9. <exact cause>" (Brief).
+    - A success: the pass sound, then short output word for word, or "Done, 42 lines."
+    """
     cancelled = cancel_event or threading.Event()
     reader = read_text or get_terminal_text
     print("----- Murmur: cleaned terminal output -----")
@@ -113,41 +163,36 @@ def announce_last_output(
     personality.record_result(failed)
     _remember_result(history, cleaned, failed, tty, folder)
     if cancelled.is_set():
-        print("Voice engine: none (stopped)")
-        print("----- End of Murmur announcement -----")
-        return
+        return _end("none (stopped)")
 
-    action = decide(cleaned)
-    if action is Action.SOFT_SOUND:
+    if not failed:
         print("----- Murmur: spoken text -----")
-        print("(none; playing the soft success sound)")
-        engine = voice.play_soft_sound() if not cancelled.is_set() else "none (stopped)"
-        print(f"Voice engine: {engine}")
-        print("----- End of Murmur announcement -----")
-        return
-
-    if action is Action.SPEAK_EXACTLY:
-        spoken_text = cleaned
-    else:
-        if failed and has_assertion_cause(cleaned):
-            # We can say "it expected X but got Y" ourselves, so skip the summary request:
-            # its answer would be thrown away, and it costs one to two seconds.
-            summary = speech_failure_summary(cleaned, "")
+        engine = voice.play_pass_sound()
+        if not cleaned.strip():
+            print("(no output; just the pass sound)")
+        elif is_short_output(cleaned):
+            print("(short output, read word for word)")
+            engine = speak_output(cleaned, cancelled)
         else:
-            summary = summarise(cleaned)
-            if failed:
-                summary = speech_failure_summary(cleaned, summary)
-        spoken_text = personality.style_summary(summary, failed=failed)
-    if cancelled.is_set():
-        print("Voice engine: none (stopped)")
-        print("----- End of Murmur announcement -----")
-        return
+            line = personality.style_summary(line_count_line(cleaned), failed=False)
+            print(line)
+            engine = _say_line(line, cancelled)
+        return _end(engine)
 
+    spoken_text = failure_words(cleaned)
+    if cancelled.is_set():
+        return _end("none (stopped)")
     print("----- Murmur: spoken text -----")
     print(spoken_text)
-    engine = voice.speak(spoken_text, mode=personality.get_mode())
-    print(f"Voice engine: {engine}")
-    print("----- End of Murmur announcement -----")
+    voice.play_fail_sound()
+    _end(_say_line(spoken_text, cancelled))
+
+
+def _say_line(text: str, cancelled: threading.Event) -> str:
+    if cancelled.is_set():
+        return "none (stopped)"
+    _remember_spoken(text)
+    return voice.speak(text, mode=personality.get_mode())
 
 
 def announce_finished_command(
@@ -167,32 +212,49 @@ def announce_finished_command(
 
     cleaned = clean(last_command_output(history))
     _remember_output(cleaned)
-    action = auto_action(cleaned, finished.seconds)
+    action = auto_action(cleaned, finished.seconds, auto_detail())
     if action is AutoAction.ANNOUNCE:
         # Errors get exactly what the hotkey gives, reusing the text we already read.
         announce_last_output(cancelled, read_text=lambda: history, tty=finished.tty)
         return
 
     personality.record_result(False)
-    if action is not AutoAction.SILENT:
-        # A success Murmur told you about replaces the old failure, so Fix it won't
-        # go back to an error you have already moved past. A silent quick "ls" does not.
-        fixer.forget_failure()
+    _forget_failure_if_rerun_passed(history)
     print(f"----- Murmur: command finished after about {finished.seconds:.0f} s -----")
     if action is AutoAction.SILENT:
-        print("(quick success; staying silent)")
+        print("(nothing to say; staying silent)")
         engine = "none (silent)"
     elif cancelled.is_set():
         engine = "none (stopped)"
-    elif action is AutoAction.SOFT_SOUND:
-        print("(success; playing the soft sound)")
-        engine = voice.play_soft_sound()
     else:
-        line = personality.done_line()
-        print(line)
-        engine = voice.speak(line, mode=personality.get_mode())
+        engine = voice.play_pass_sound()
+        if action is AutoAction.READ_OUTPUT:
+            print(cleaned)
+            engine = speak_output(cleaned, cancelled)
+        elif action is AutoAction.LINE_COUNT:
+            line = personality.style_summary(line_count_line(cleaned), failed=False)
+            print(line)
+            engine = _say_line(line, cancelled)
+        elif action is AutoAction.DONE_LINE:
+            line = personality.done_line()
+            print(line)
+            engine = _say_line(line, cancelled)
+        else:
+            print("(success; just the pass sound)")
     print(f"Voice engine: {engine}")
     print("----- End of Murmur auto-announce -----")
+
+
+def _remember_spoken(text: str) -> None:
+    """Keep the last thing Murmur announced, so Space in the Murmur key layer can repeat it."""
+    global _LAST_SPOKEN
+    with _LAST_OUTPUT_LOCK:
+        _LAST_SPOKEN = text
+
+
+def last_spoken() -> str | None:
+    with _LAST_OUTPUT_LOCK:
+        return _LAST_SPOKEN
 
 
 def _remember_output(cleaned: str) -> None:
@@ -211,7 +273,7 @@ def read_full_output(
     *,
     read_text: Callable[[], str] | None = None,
 ) -> None:
-    """Read the last command's whole cleaned output aloud, word for word, in Focused style.
+    """Read the last command's whole cleaned output aloud, word for word, in Brief style.
 
     With auto-announce on, that's the last command Murmur saw finish (in any tab).
     Otherwise we read the front Terminal tab now, so it's never out of date.
@@ -225,7 +287,7 @@ def read_full_output(
         except RuntimeError as error:
             text = None
             print(error)
-            voice.speak(str(error), mode=personality.Mode.FOCUSED)
+            voice.speak(str(error), mode=personality.Mode.BRIEF)
     if text is not None:
         spoken = readout.speakable(text) or "There's no output to read."
         print(spoken)
@@ -234,8 +296,8 @@ def read_full_output(
             if cancelled.is_set():
                 engine = "none (stopped)"
                 break
-            # Always Focused: no openers, no jokes, just the words.
-            engine = voice.speak(piece, mode=personality.Mode.FOCUSED)
+            # Always Brief: no openers, no jokes, just the words.
+            engine = voice.speak(piece, mode=personality.Mode.BRIEF)
         print(f"Voice engine: {engine}")
     print("----- End of Murmur full output -----")
 
@@ -604,9 +666,40 @@ def _read_last_output_label() -> str:
     )
 
 
+def _voice_choices() -> list[tuple[str, str, str]]:
+    """The Voice menu: (choice, title, what VoiceOver says for it)."""
+    choices = [
+        ("voiceover", "VoiceOver", "VoiceOver: your own VoiceOver voice, rate and braille display"),
+        ("mac", "Mac voice", "Mac voice: fast, works offline"),
+    ]
+    for name, title in config.VOICES.items():
+        choices.append((name, f"Natural voice: {title}", f"Natural voice {title}, from OpenAI, needs the internet"))
+    return choices
+
+
+def _current_voice_choice() -> str:
+    """Which Voice menu item gets the checkmark."""
+    chosen = voice.chosen_engine()
+    if chosen == "natural":
+        return voice.current_voice()
+    if chosen == "auto":
+        return voice.engine()  # VoiceOver if it's running, otherwise the Mac voice
+    return chosen
+
+
+def current_voice_name() -> str:
+    """Words for who is talking, like "Mac voice" or "Natural voice: Marin"."""
+    chosen = voice.chosen_engine()
+    if chosen == "natural":
+        return f"Natural voice: {config.VOICES[voice.current_voice()]}"
+    if chosen == "voiceover" and voice.engine() != "voiceover":
+        return "VoiceOver (off, so Mac voice)"
+    return config.ENGINES[voice.engine()]
+
+
 _PERSONALITY_LABELS = {
-    personality.Mode.SMOOTH: "Smooth: relaxed and a little playful",
-    personality.Mode.FOCUSED: "Focused: short and neutral",
+    personality.Mode.BRIEF: "Brief: status first, then file, line and exact cause",
+    personality.Mode.FRIENDLY: "Friendly: warm and a little playful, a few more words",
 }
 
 
@@ -630,7 +723,7 @@ class MurmurApp(rumps.App):
         )
         self.auto_item = rumps.MenuItem("Auto-announce finished commands", callback=self.toggle_auto)
 
-        self.personality_menu = rumps.MenuItem("Personality")
+        self.personality_menu = rumps.MenuItem("Style")
         self.personality_items = {}
         for mode in personality.Mode:
             item = rumps.MenuItem(mode.value, callback=self._personality_chooser(mode))
@@ -638,12 +731,21 @@ class MurmurApp(rumps.App):
             self.personality_items[mode] = item
             self.personality_menu.add(item)
 
+        # Voice: VoiceOver, the Mac voice, or a Natural (OpenAI) voice. One list, one choice.
         self.voice_menu = rumps.MenuItem("Voice")
         self.voice_items = {}
-        for choice, name in config.VOICES.items():
+        for choice, name, label in _voice_choices():
             item = rumps.MenuItem(name, callback=self._voice_chooser(choice))
+            _speak_label(item, label)
             self.voice_items[choice] = item
             self.voice_menu.add(item)
+
+        self.speed_menu = rumps.MenuItem("Speed")
+        self.speed_items = {}
+        for choice, name in config.SPEEDS.items():
+            item = rumps.MenuItem(name, callback=self._speed_chooser(choice))
+            self.speed_items[choice] = item
+            self.speed_menu.add(item)
 
         self.tap_menu = rumps.MenuItem("Double-tap key")
         self.tap_items = {}
@@ -692,6 +794,7 @@ class MurmurApp(rumps.App):
                 None,
                 self.personality_menu,
                 self.voice_menu,
+                self.speed_menu,
                 self.tap_menu,
                 self.captions_item,
                 None,
@@ -706,6 +809,7 @@ class MurmurApp(rumps.App):
         )
         self._show_personality_choice()
         self._show_voice_choice()
+        self._show_speed_choice()
         self._show_tap_choice()
         self._show_auto_choice()
         self._show_captions_choice()
@@ -801,13 +905,13 @@ class MurmurApp(rumps.App):
         current = personality.get_mode()
         for mode, item in self.personality_items.items():
             item.state = int(mode is current)
-        self._show_submenu_choice(self.personality_menu, "Personality", current.value)
+        self._show_submenu_choice(self.personality_menu, "Style", current.value)
 
-    def choose_smooth(self, _sender: object) -> None:
-        self._choose_personality(personality.Mode.SMOOTH)
+    def choose_brief(self, _sender: object) -> None:
+        self._choose_personality(personality.Mode.BRIEF)
 
-    def choose_focused(self, _sender: object) -> None:
-        self._choose_personality(personality.Mode.FOCUSED)
+    def choose_friendly(self, _sender: object) -> None:
+        self._choose_personality(personality.Mode.FRIENDLY)
 
     def _voice_chooser(self, choice: str) -> Callable[[object], None]:
         def choose(_sender: object) -> None:
@@ -816,15 +920,42 @@ class MurmurApp(rumps.App):
         return choose
 
     def choose_voice(self, choice: str) -> None:
-        settings.set("voice", choice)
+        """choice is "voiceover", "mac", or a Natural voice like "marin"."""
+        if choice in config.VOICES:
+            settings.set("engine", "natural")
+            settings.set("voice", choice)
+        else:
+            settings.set("engine", choice)
         self._show_voice_choice()
-        print(f"Murmur voice: now {config.VOICES[choice]}.")
+        self._show_speed_choice()
+        print(f"Murmur voice: now {current_voice_name()}.")
 
     def _show_voice_choice(self) -> None:
-        current = voice.current_voice()
+        current = _current_voice_choice()
         for choice, item in self.voice_items.items():
             item.state = int(choice == current)
-        self._show_submenu_choice(self.voice_menu, "Voice", config.VOICES[current])
+        self._show_submenu_choice(self.voice_menu, "Voice", current_voice_name())
+
+    def _speed_chooser(self, choice: str) -> Callable[[object], None]:
+        def choose(_sender: object) -> None:
+            self.choose_speed(choice)
+
+        return choose
+
+    def choose_speed(self, choice: str) -> None:
+        settings.set("speed", choice)
+        self._show_speed_choice()
+        print(f"Murmur speed: now {config.SPEEDS[choice]}.")
+
+    def _show_speed_choice(self) -> None:
+        current = voice.speed_choice()
+        for choice, item in self.speed_items.items():
+            item.state = int(choice == current)
+        self._show_submenu_choice(self.speed_menu, "Speed", config.SPEEDS[current])
+        if voice.engine() == "voiceover":
+            # The menu still works, but VoiceOver talks at your own VoiceOver rate.
+            _speak_label(self.speed_menu, f"Speed, currently {config.SPEEDS[current]}. "
+                         "VoiceOver uses its own rate, set in VoiceOver")
 
     def _tap_chooser(self, choice: str) -> Callable[[object], None]:
         def choose(_sender: object) -> None:

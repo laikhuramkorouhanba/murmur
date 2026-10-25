@@ -8,19 +8,15 @@ from enum import Enum
 from murmur import config
 
 
-class Action(str, Enum):
-    SOFT_SOUND = "soft_sound"
-    SPEAK_EXACTLY = "speak_exactly"
-    SUMMARISE = "summarise"
-
-
 class AutoAction(str, Enum):
     """What auto-announce does when a command finishes on its own."""
 
     SILENT = "silent"
-    SOFT_SOUND = "soft_sound"
-    DONE_LINE = "done_line"  # one short spoken line, like "Done, no errors."
-    ANNOUNCE = "announce"  # the full announcement, same as pressing the hotkey
+    PASS_SOUND = "pass_sound"  # just the pass sound, no words
+    READ_OUTPUT = "read_output"  # the pass sound, then the output word for word
+    LINE_COUNT = "line_count"  # the pass sound, then "Done, 42 lines."
+    DONE_LINE = "done_line"  # a long command with no output: the pass sound, then "Done."
+    ANNOUNCE = "announce"  # an error: the full announcement, same as pressing the hotkey
 
 
 @dataclass(frozen=True)
@@ -43,10 +39,6 @@ _PYTEST_ASSERT = re.compile(
     r"^\s*E\s+(?:AssertionError:\s+)?assert\s+(?P<actual>.+?)\s*==\s*(?P<expected>.+?)\s*$"
 )
 _DECIMAL_VALUE = re.compile(r"Decimal\((['\"])(?P<value>[^'\"]+)\1\)")
-_SUCCESS = re.compile(
-    r"\b(?:\d+\s+passed|success(?:fully)?|installed|finished|completed|done)\b",
-    re.IGNORECASE,
-)
 _FILE_LOCATION = re.compile(
     r"(?<![\w./-])/?(?:[\w.-]+/)*[\w.-]+\.[A-Za-z0-9_]+:\d+(?::\d+)?"
 )
@@ -60,35 +52,51 @@ _COPIED_EXCEPTION_TEXT = re.compile(
 )
 
 
-def auto_action(text: str, seconds: float) -> AutoAction:
-    """Pick what auto-announce does. Silence is the feature, so only errors get the full treatment.
+def output_lines(text: str) -> int:
+    """How many lines of output there are, not counting blank ones."""
+    return sum(1 for line in text.splitlines() if line.strip())
 
-    | Finished command            | Auto-announce does      |
-    | --------------------------- | ----------------------- |
-    | has an error (any length)   | full announcement       |
-    | under 2 s, successful       | nothing                 |
-    | 2 s to under 15 s, success  | soft sound              |
-    | 15 s or more, successful    | one short "done" line   |
+
+def is_short_output(text: str) -> bool:
+    """Short enough to read out word for word: about ten lines at most."""
+    return output_lines(text) <= config.SHORT_OUTPUT_LINES and len(text.strip()) <= config.SHORT_OUTPUT_CHARS
+
+
+def auto_detail() -> str:
+    """The "Auto-announce" menu choice: "errors", "short" or "everything"."""
+    from murmur import settings  # here, so this file stays free of saved state for its tests
+
+    chosen = settings.get("auto_detail")
+    return chosen if chosen in config.AUTO_DETAILS else "short"
+
+
+def auto_action(text: str, seconds: float, detail: str = "short") -> AutoAction:
+    """Pick what auto-announce does with a finished command.
+
+    | Finished command               | Errors only | Errors and short output | Everything |
+    | ------------------------------ | ----------- | ----------------------- | ---------- |
+    | has an error (any length)      | announce    | announce                | announce   |
+    | no output                      | silent      | silent                  | silent     |
+    | no output, ran 15 s or more    | "Done."     | "Done."                 | "Done."    |
+    | up to about 10 lines           | sound only* | read word for word      | read all   |
+    | longer                         | sound only* | "Done, 42 lines."       | read all   |
+
+    * successes quicker than 2 s stay silent with Errors only.
     """
     if contains_error(text):
         return AutoAction.ANNOUNCE
-    if seconds < config.AUTO_SHORT_SECONDS:
-        return AutoAction.SILENT
-    if seconds >= config.AUTO_LONG_SUCCESS_SECONDS:
-        return AutoAction.DONE_LINE
-    return AutoAction.SOFT_SOUND
+    if not text.strip():
+        return AutoAction.DONE_LINE if seconds >= config.AUTO_LONG_SUCCESS_SECONDS else AutoAction.SILENT
+    if detail == "errors":
+        return AutoAction.SILENT if seconds < config.AUTO_SHORT_SECONDS else AutoAction.PASS_SOUND
+    if detail == "everything" or is_short_output(text):
+        return AutoAction.READ_OUTPUT
+    return AutoAction.LINE_COUNT
 
 
-def decide(text: str) -> Action:
-    """Choose a soft cue, exact speech, or a short AI summary."""
-    text = text.strip()
-    if not text:
-        return Action.SOFT_SOUND
-    if contains_error(text) or len(text) > config.SUMMARY_TRIGGER_CHARS:
-        return Action.SUMMARISE
-    if _SUCCESS.search(text):
-        return Action.SOFT_SOUND
-    return Action.SPEAK_EXACTLY
+def line_count_line(text: str) -> str:
+    count = output_lines(text)
+    return f"Done, {count} {'line' if count == 1 else 'lines'}."
 
 
 def contains_error(text: str) -> bool:
@@ -260,3 +268,64 @@ def speech_failure_summary(text: str, summary: str) -> str:
     if location:
         return f"{facts.rstrip('. ')}. The error is in {location}."
     return facts
+
+
+def _exact_place(location: str) -> str:
+    """shop_demo_check.py:9 as "shop_demo_check.py, line 9": the real name, for VoiceOver and braille."""
+    match = re.match(r"^(?P<path>.+?):(?P<line>\d+)(?::\d+)?$", location)
+    if not match:
+        return location
+    return f"{match.group('path').replace(chr(92), '/').rsplit('/', 1)[-1]}, line {match.group('line')}"
+
+
+def _exact_cause_line(evidence: ErrorEvidence) -> str | None:
+    """The main error line as printed, minus pytest's "E" margin and any file:line we already said."""
+    line = evidence.main_error_line
+    if not line:
+        return None
+    line = re.sub(r"^\s*E\s+", "", line)
+    line = _FILE_LOCATION.sub("", line)
+    line = re.sub(r"^[\s:,-]+", "", line).strip()
+    return line or None
+
+
+def has_exact_cause(text: str) -> bool:
+    """True when Brief can name the cause from the output itself, with no summary request."""
+    evidence = find_error_evidence(text)
+    if _assertion_cause(text) is not None:
+        return True
+    cause = _exact_cause_line(evidence)
+    # "shop.py:9: AssertionError" on its own names no cause, so a summary still helps there.
+    return cause is not None and not re.fullmatch(r"[A-Za-z_]*(?:Error|Exception)", cause)
+
+
+def brief_failure(text: str, summary: str = "", *, exact_names: bool = False) -> str:
+    """Brief style: "Failed.", then the file and line, then the exact cause. Nothing else.
+
+    exact_names keeps the real file name (for VoiceOver and braille displays);
+    otherwise it's said the way a voice reads it best, like "shop demo check dot py".
+    """
+    count_match = _FAILED_COUNT.search(text)
+    count = int(count_match.group("count")) if count_match else 1
+    parts = ["Failed." if count == 1 else f"Failed, {count} tests."]
+
+    evidence = find_error_evidence(text)
+    if evidence.file_locations:
+        location = evidence.file_locations[-1]
+        place = _exact_place(location) if exact_names else natural_file_location(location)
+        parts.append(f"{place}.")
+
+    assertion = _assertion_cause(text)
+    cause = _exact_cause_line(evidence)
+    if assertion:
+        expected, actual = assertion
+        parts.append(f"Expected {expected}, got {actual}.")
+    elif has_exact_cause(text) and cause:
+        parts.append(cause)
+    elif summary.strip():
+        parts.append(summary.strip())
+    else:
+        reason = _natural_cause(evidence)
+        parts.append(f"{reason[0].upper()}{reason[1:]}.")
+    return " ".join(parts)
+

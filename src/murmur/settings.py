@@ -14,11 +14,14 @@ PATH = Path.home() / ".murmur" / "settings.json"
 
 DEFAULTS: dict[str, Any] = {
     "auto_announce": True,
+    "auto_detail": "short",  # errors, short (errors and short output) or everything
     "captions": False,
     "double_tap_key": "right_command",
+    "engine": "auto",  # VoiceOver if it's running, otherwise the Mac voice
     "key_prompt_done": False,  # asked for the API key once already
-    "personality": "Smooth",
-    "voice": "marin",
+    "speed": "fast",
+    "style": "Brief",  # a new name: the old "personality" setting is ignored, so everyone starts on Brief
+    "voice": "marin",  # the Natural voice: marin or cedar
     "welcome_done": False,
 }
 

@@ -6,14 +6,23 @@ import pytest
 
 import sounddevice
 
-from murmur import config, voice
+from murmur import config, settings, voice
 from murmur import personality
+
+
+@pytest.fixture(autouse=True)
+def natural_voice():
+    """Most of these tests are about the Natural (OpenAI) voice, so pick it."""
+    settings.set("engine", "natural")
+
+
+_REAL_OUTPUT_STREAM = sounddevice.RawOutputStream  # saved before conftest swaps in a silent one
 
 
 class FakeOutputStream:
     def __init__(self, **kwargs):
         # Fail like the real thing if we pass an option sounddevice does not have.
-        inspect.signature(sounddevice.RawOutputStream).bind(**kwargs)
+        inspect.signature(_REAL_OUTPUT_STREAM).bind(**kwargs)
         self.arguments = kwargs
         self.chunks: list[bytes] = []
         self.started = False
@@ -121,7 +130,7 @@ def test_missing_key_uses_the_macos_say_command(monkeypatch) -> None:
 
     assert voice.speak("The tests passed.") == "macOS say"
 
-    assert commands == [["say", "-r", "180", "The tests passed."]]
+    assert commands == [["say", "-r", "300", "The tests passed."]]
 
 
 def test_streams_openai_audio_using_marin_and_configured_speed(monkeypatch) -> None:
@@ -143,9 +152,8 @@ def test_streams_openai_audio_using_marin_and_configured_speed(monkeypatch) -> N
 
     assert speech_create.arguments["model"] == "gpt-4o-mini-tts"
     assert speech_create.arguments["voice"] == "marin"
-    assert speech_create.arguments["speed"] == 1.1  # Smooth is a little brisker
-    assert "friendly radio host" in speech_create.arguments["instructions"]
-    assert "unhurried" not in speech_create.arguments["instructions"]
+    assert speech_create.arguments["speed"] == 1.5  # Fast, the default speed
+    assert "Clear, neutral and brisk" in speech_create.arguments["instructions"]  # Brief, the default
     assert speech_create.arguments["response_format"] == "pcm"
     assert output_streams[0].chunks == [b"\x00\x00\x01\x00"]
     assert output_streams[0].closed
@@ -170,7 +178,7 @@ def test_network_error_falls_back_to_macos_say(monkeypatch) -> None:
 
     assert voice.speak("Exact fallback text.", client=client) == "macOS say"
 
-    assert commands == [["say", "-r", "180", "Exact fallback text."]]
+    assert commands == [["say", "-r", "300", "Exact fallback text."]]
 
 
 def test_no_audio_falls_back_to_macos_say(monkeypatch) -> None:
@@ -192,7 +200,7 @@ def test_no_audio_falls_back_to_macos_say(monkeypatch) -> None:
 
     assert voice.speak("No audio arrived.", client=client) == "macOS say"
 
-    assert commands == [["say", "-r", "180", "No audio arrived."]]
+    assert commands == [["say", "-r", "300", "No audio arrived."]]
 
 
 class SlowResponse(FakeStreamingResponse):
@@ -307,13 +315,17 @@ def test_stopping_during_the_wait_plays_nothing(quick_race) -> None:
     voice.reset_stop()
 
 
-def test_focused_keeps_normal_speed_and_smooth_is_brisker() -> None:
-    from murmur import personality
+def test_each_speed_maps_to_a_real_number_for_each_engine() -> None:
+    from murmur import settings
 
-    assert personality.speech_speed("Smooth") == 1.1
-    assert personality.speech_speed("Focused") == 1.0
-    assert "unhurried" not in personality.tts_instructions("Smooth")
-    assert "warm" in personality.tts_instructions("Smooth").lower()
+    expected = {"normal": (1.0, 200), "fast": (1.5, 300), "very_fast": (2.0, 380), "maximum": (3.0, 450)}
+    for choice, (natural, mac) in expected.items():
+        settings.set("speed", choice)
+        assert (voice.natural_speed(), voice.mac_voice_rate()) == (natural, mac)
+    settings.set("speed", "warp")  # unknown: back to Fast
+    assert voice.speed_choice() == "fast"
+    assert "unhurried" not in personality.tts_instructions("Friendly")
+    assert "warm" in personality.tts_instructions("Friendly").lower()
 
 
 class BreaksPartway(FakeStreamingResponse):
@@ -400,7 +412,9 @@ def test_audio_device_failure_falls_back_to_macos_say(monkeypatch) -> None:
             return 0
 
     def fail_to_open_audio(**_kwargs):
-        raise OSError("no output device")
+        raise sounddevice.PortAudioError("Error starting stream: Internal PortAudio error [PaErrorCode -9986]")
+
+    monkeypatch.setattr(voice, "_restart_audio", lambda: None)
 
     monkeypatch.setattr(voice.sounddevice, "RawOutputStream", fail_to_open_audio)
     monkeypatch.setattr(
@@ -412,12 +426,12 @@ def test_audio_device_failure_falls_back_to_macos_say(monkeypatch) -> None:
 
     assert voice.speak("Use the Mac voice.", client=client) == "macOS say"
 
-    assert commands == [["say", "-r", "180", "Use the Mac voice."]]
+    assert commands == [["say", "-r", "300", "Use the Mac voice."]]
 
 
-def test_focused_mode_uses_neutral_tts_instructions(monkeypatch) -> None:
+def test_brief_mode_uses_neutral_tts_instructions(monkeypatch) -> None:
     voice.reset_stop()
-    personality.set_mode(personality.Mode.FOCUSED)
+    personality.set_mode(personality.Mode.BRIEF)
     monkeypatch.setattr(config, "OPENAI_API_KEY", "test-key")
     monkeypatch.setattr(voice.sounddevice, "RawOutputStream", lambda **kwargs: FakeOutputStream(**kwargs))
     speech_create = FakeSpeechCreate(FakeStreamingResponse([b"\x00\x00"]))
@@ -425,9 +439,9 @@ def test_focused_mode_uses_neutral_tts_instructions(monkeypatch) -> None:
 
     voice.speak("A short result.", client=client)
 
-    assert "Clear, calm, neutral" in speech_create.arguments["instructions"]
+    assert "Clear, neutral and brisk" in speech_create.arguments["instructions"]
     assert "late-night radio host" not in speech_create.arguments["instructions"]
-    personality.set_mode(personality.Mode.SMOOTH)
+    personality.set_mode(personality.Mode.FRIENDLY)
 
 
 def test_stop_speech_terminates_current_playback(monkeypatch) -> None:
@@ -570,10 +584,11 @@ def test_listeners_hear_the_soft_sound_and_ticks_as_captions(monkeypatch) -> Non
     monkeypatch.setattr(voice.sounddevice, "RawOutputStream", lambda **kwargs: FakeOutputStream(**kwargs))
     heard = listen(monkeypatch)
 
-    voice.play_soft_sound()
+    voice.play_pass_sound()
+    voice.play_fail_sound()
     voice.play_soft_sound(voice.TICK_CAPTION)
 
-    assert heard == ["♪ success sound", None, "♪ still working", None]
+    assert heard == ["♪ pass sound", None, "♪ fail sound", None, "♪ still working", None]
 
 
 def test_nothing_is_announced_when_speech_is_stopped(monkeypatch) -> None:
@@ -646,3 +661,117 @@ def test_muted_mac_voice_is_not_run(monkeypatch) -> None:
         assert voice.speak("Quiet.") == "macOS say"
     finally:
         voice.set_muted(False)
+
+
+def test_pass_and_fail_sounds_are_short_and_clearly_different() -> None:
+    passed = voice._tone_bytes(voice._PASS_NOTES)
+    failed = voice._tone_bytes(voice._FAIL_NOTES, buzz=True)
+
+    # 16-bit samples at 22050 per second: both well under a quarter of a second.
+    assert len(passed) / 2 / 22050 < 0.25 and len(failed) / 2 / 22050 < 0.25
+    assert passed != failed
+    assert voice._PASS_NOTES[0][0] < voice._PASS_NOTES[1][0]  # pass goes up
+    assert voice._FAIL_NOTES[0][0] > voice._FAIL_NOTES[1][0]  # fail goes down
+
+
+def test_the_mac_voice_engine_uses_say_at_the_chosen_rate(monkeypatch) -> None:
+    from murmur import settings
+
+    voice.reset_stop()
+    settings.set("engine", "mac")
+    settings.set("speed", "maximum")
+    commands = []
+
+    class FakeProcess:
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(voice.subprocess, "Popen", lambda command, **_kwargs: commands.append(command) or FakeProcess())
+    monkeypatch.setattr(config, "OPENAI_API_KEY", "test-key")
+
+    assert voice.speak("Failed.") == "macOS say"
+    assert commands == [["say", "-r", "450", "Failed."]]
+
+
+def test_voiceover_is_the_default_while_it_is_running(monkeypatch) -> None:
+    from murmur import settings
+
+    settings.set("engine", "auto")
+    monkeypatch.setattr(voice, "voiceover_running", lambda: True)
+    assert voice.engine() == "voiceover"
+    monkeypatch.setattr(voice, "voiceover_running", lambda: False)
+    assert voice.engine() == "mac"  # VoiceOver off: the Mac voice, never silence
+
+    settings.set("engine", "voiceover")
+    assert voice.engine() == "mac"
+    settings.set("engine", "natural")
+    assert voice.engine() == "natural"
+
+
+def test_voiceover_engine_posts_an_announcement_and_waits_about_as_long_as_it_talks(monkeypatch) -> None:
+    from murmur import settings
+
+    voice.reset_stop()
+    settings.set("engine", "voiceover")
+    monkeypatch.setattr(voice, "voiceover_running", lambda: True)
+    posted = []
+    monkeypatch.setattr(voice, "_on_main_thread", lambda work: work())
+    monkeypatch.setattr(voice, "_post_voiceover_announcement", posted.append)
+    monkeypatch.setattr(config, "VOICEOVER_SECONDS_PER_CHAR", 0.0)
+    monkeypatch.setattr(voice, "voiceover_seconds", lambda text: 0.01)
+
+    assert voice.speak("Failed. shop.py, line 9.") == "VoiceOver"
+    assert posted == ["Failed. shop.py, line 9."]
+
+
+def test_voiceover_posting_goes_through_the_accessibility_announcement(monkeypatch) -> None:
+    import AppKit
+
+    calls = []
+    monkeypatch.setattr(AppKit, "NSAccessibilityPostNotificationWithUserInfo", lambda *args: calls.append(args))
+
+    voice._post_voiceover_announcement("Passed.")
+
+    element, notification, info = calls[0]
+    assert notification == AppKit.NSAccessibilityAnnouncementRequestedNotification
+    assert info[AppKit.NSAccessibilityAnnouncementKey] == "Passed."
+    assert info[AppKit.NSAccessibilityPriorityKey] == AppKit.NSAccessibilityPriorityHigh
+
+
+def test_an_audio_device_hiccup_is_retried_once_after_restarting_audio(monkeypatch, capsys) -> None:
+    voice.reset_stop()
+    restarts = []
+    tries = []
+
+    def flaky(**kwargs):
+        tries.append(kwargs)
+        if len(tries) == 1:
+            raise sounddevice.PortAudioError("Internal PortAudio error [PaErrorCode -9986]")
+        return FakeOutputStream(**kwargs)
+
+    monkeypatch.setattr(voice.sounddevice, "RawOutputStream", flaky)
+    monkeypatch.setattr(voice, "_restart_audio", lambda: restarts.append(True))
+
+    assert voice.play_pass_sound() == "sounddevice"
+    assert len(tries) == 2 and restarts == [True]
+    assert "trying once more" in capsys.readouterr().out
+
+
+def test_a_second_audio_failure_uses_the_mac_voice_for_the_line(monkeypatch) -> None:
+    voice.reset_stop()
+    commands = []
+
+    class FakeProcess:
+        def wait(self):
+            return 0
+
+    def broken(**_kwargs):
+        raise sounddevice.PortAudioError("Internal PortAudio error [PaErrorCode -9986]")
+
+    monkeypatch.setattr(voice.sounddevice, "RawOutputStream", broken)
+    monkeypatch.setattr(voice, "_restart_audio", lambda: None)
+    monkeypatch.setattr(voice.subprocess, "Popen", lambda command, **_kwargs: commands.append(command) or FakeProcess())
+
+    assert voice.play_fail_sound() == "macOS say"
+    assert commands == [["say", "-r", "300", "Failed."]]
+

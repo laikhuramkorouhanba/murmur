@@ -50,8 +50,22 @@ TTS_MODEL = "gpt-4o-mini-tts"
 VOICE = "marin"
 # OpenAI voices you can pick in the "Voice" menu.
 VOICES = {"marin": "Marin", "cedar": "Cedar"}
-SPEECH_SPEED = 1.0  # Focused; Smooth uses SMOOTH_SPEECH_SPEED
-SMOOTH_SPEECH_SPEED = 1.1
+
+# Who does the talking. Picked in the "Voice" menu; "auto" means VoiceOver when
+# it's running, and the Mac voice when it isn't.
+ENGINES = {"voiceover": "VoiceOver", "mac": "Mac voice", "natural": "Natural voice"}
+
+# The "Speed" menu. Screen reader users often listen at two to three times normal speed.
+SPEEDS = {"normal": "Normal", "fast": "Fast", "very_fast": "Very fast", "maximum": "Maximum"}
+# OpenAI's speed (0.25 to 4). Measured on one sentence: 1.0 took 12.0 s, 1.5 took
+# 7.5 s, 2.0 took 5.3 s, 3.0 took 4.5 s. Above 3 it gains little and gets harder to follow.
+NATURAL_SPEEDS = {"normal": 1.0, "fast": 1.5, "very_fast": 2.0, "maximum": 3.0}
+# The Mac voice's rate in words per minute (say -r). Measured: it stops getting
+# faster at about 400, so asking for more than 450 changes nothing.
+MAC_VOICE_RATES = {"normal": 200, "fast": 300, "very_fast": 380, "maximum": 450}
+# VoiceOver never tells us when it has finished a line, so we wait about this long
+# per character before the next one, to avoid talking over it.
+VOICEOVER_SECONDS_PER_CHAR = 1 / 30
 TTS_CONNECT_TIMEOUT_SECONDS = 2.0  # if Wi-Fi is dead, give up quickly and use the Mac voice
 # How long we wait for OpenAI to send audio. We measured 0.7 to 2.6 s, and on
 # stage more than about 4 s of silence sounds broken, while `say` starts in 0.3 s.
@@ -60,7 +74,6 @@ FIRST_AUDIO_TIMEOUT_SECONDS = 3.5
 # arrived after this long, a second identical request is sent in parallel.
 TTS_HEDGE_SECONDS = 1.5
 TTS_KEEPALIVE_SECONDS = 120  # keep the connection to OpenAI open this long between lines
-SYSTEM_VOICE_RATE = 180
 
 # The M key's physical key code on a Mac keyboard. We match this, not the letter,
 # because holding Option changes which letter macOS reports.
@@ -95,8 +108,12 @@ AUTO_SNAPSHOT_SECONDS = 1.0  # asking Terminal "busy?" costs about 0.2 s, so onl
 AUTO_QUIET_SECONDS = 0.5  # after output stops for this long, look at the screen once
 AUTO_SAME_FINISH_SECONDS = 3.0  # both checks seeing one command within this time count once
 AUTO_ERROR_POLL_SECONDS = 5.0  # slower while something is wrong, so errors don't spam
-AUTO_SHORT_SECONDS = 2.0  # quicker than this and successful: stay silent
-AUTO_LONG_SUCCESS_SECONDS = 15.0  # this long and successful: say one short line
+AUTO_SHORT_SECONDS = 2.0  # with "Errors only", a success quicker than this stays silent
+AUTO_LONG_SUCCESS_SECONDS = 15.0  # a command with no output that ran this long says "Done."
+# The "Auto-announce" menu. Short output is read word for word; it's quicker than a summary.
+AUTO_DETAILS = {"errors": "Errors only", "short": "Errors and short output", "everything": "Everything"}
+SHORT_OUTPUT_LINES = 10
+SHORT_OUTPUT_CHARS = 800  # ten very long lines are not "short"
 # Full-screen or never-ending programs. Leaving them is not a "finished command".
 AUTO_IGNORED_PROGRAMS = frozenset(
     {

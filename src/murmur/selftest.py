@@ -209,8 +209,8 @@ def known_patch(failure, root, cancel, on_tick=None, log_file=None) -> fixer.Cod
 
 
 def _working_cues() -> set[str]:
-    smooth, focused = personality._FIX_LINES["working"]
-    return {*smooth, focused}
+    friendly, brief = personality._FIX_LINES["working"]
+    return {*friendly, brief}
 
 
 def _short(seconds: float | None) -> str:
@@ -291,6 +291,12 @@ def run(no_codex: bool, muted: bool, demo_mode: bool = False) -> int:
         fixer.run_codex = known_patch
         fixer.codex_ready = lambda: None
 
+    # Keep your settings file exactly as it was, even keys you never set. The test
+    # checks the default Brief wording and short-output reading, so it uses those.
+    saved_settings = settings.PATH.read_bytes() if settings.PATH.exists() else None
+    settings.set("style", personality.Mode.BRIEF.value)
+    settings.set("auto_detail", "short")
+
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     log = open(LOG_PATH, "w", encoding="utf-8")
     tee = Tee(log)
@@ -336,34 +342,28 @@ def run(no_codex: bool, muted: bool, demo_mode: bool = False) -> int:
 
         step("Rebuild demo project", rebuild)
 
-        # 3. The failing test, caught by the real auto-announce chain.
+        # 3. The failing test, caught by the real auto-announce chain, in Brief wording.
         def auto_announce(current: Step) -> None:
-            announcer = monitor.AutoAnnouncer(app.start_auto_announcement, snapshot=tab.snapshot, enabled=lambda: True)
-            stop = threading.Event()
-
-            def watch() -> None:
-                while not stop.is_set():
-                    stop.wait(announcer.check_once())
-
-            watcher_thread = threading.Thread(target=watch, daemon=True)
-            watcher_thread.start()
-            time.sleep(1.5)  # let it take its first look at the tab before anything runs
-            sent = time.monotonic()
-            tab.send(f'cd "{DEMO}" && {TEST_COMMAND}')
-            heard = wait_until(lambda: any("expected" in r.text for r in recorder.since(current.mark)), timeout=45)
-            began = recorder.first_start_after(sent, "expected")
-            if heard and began is not None:
-                current.note = f"started speaking {began - sent:.1f} s after the test was started"
-            wait_for_job(30)
-            stop.set()
-            watcher_thread.join(timeout=5)
+            with Announcing(tab):
+                sent = time.monotonic()
+                tab.send(f'cd "{DEMO}" && {TEST_COMMAND}')
+                heard = wait_until(lambda: any("Failed." in r.text for r in recorder.since(current.mark)), timeout=45)
+                began = recorder.first_start_after(sent, "Failed.")
+                if heard and began is not None:
+                    current.note = f"started speaking {began - sent:.1f} s after the test was started"
+                wait_for_job(30)
             if not heard:
                 current.fail("auto-announce never spoke about the failure")
                 return
-            text = " ".join(r.text for r in recorder.since(current.mark))
-            for needed in ("shop demo check dot py", "line 9", "expected 21.60 but got 18.40"):
-                if needed not in text:
-                    current.fail(f"spoken text is missing {needed!r}")
+            spoken = [r.text for r in recorder.since(current.mark)]
+            exact = voice.engine() == "voiceover"
+            place = "shop_demo_check.py, line 9" if exact else "shop demo check dot py, line 9"
+            wanted = f"Failed. {place}. Expected 21.60, got 18.40."
+            line = next((text for text in spoken if "Failed." in text), "")
+            if line != wanted:
+                current.fail(f"not Brief: {line!r}, wanted {wanted!r}")
+            if not spoken or spoken[0] != voice.FAIL_SOUND_CAPTION:
+                current.fail("the fail sound didn't play first")
             failure = fixer.last_failure()
             if failure is None or Path(failure.folder or "") != DEMO:
                 current.fail(f"Fix it wouldn't know the project (remembered: {failure})")
@@ -431,12 +431,58 @@ def run(no_codex: bool, muted: bool, demo_mode: bool = False) -> int:
 
         step("Rerun test: fails again", rerun_fails)
 
+        # 8. Short successful output is read word for word, after the pass sound.
+        def short_output(current: Step) -> None:
+            with Announcing(tab):
+                tab.send("ls")
+                heard = wait_until(lambda: any("shop.py" in r.text for r in recorder.since(current.mark)), timeout=20)
+                wait_for_job(20)
+            spoken = [r.text for r in recorder.since(current.mark)]
+            if not heard:
+                current.fail("auto-announce didn't read the ls output")
+                return
+            if spoken[0] != voice.PASS_SOUND_CAPTION:
+                current.fail("the pass sound didn't play first")
+            words = " ".join(spoken[1:])
+            for name in ("README.md", "shop.py", "shop_demo_check.py"):
+                if name not in words:
+                    current.fail(f"{name} wasn't read out")
+            current.note = "ls output read word for word"
+
+        step("Auto-announce short output (ls)", short_output)
+
         if demo_mode:
             demo_steps(step, recorder)
     finally:
         sys.stdout, sys.stderr = sys.__stdout__, sys.__stderr__
         log.close()
+        if saved_settings is None:
+            settings.PATH.unlink(missing_ok=True)
+        else:
+            settings.PATH.write_bytes(saved_settings)
     return finish(steps, tab, out)
+
+
+class Announcing:
+    """Run the real auto-announce chain on the test tab while inside this block."""
+
+    def __init__(self, tab: TestTab) -> None:
+        self._announcer = monitor.AutoAnnouncer(app.start_auto_announcement, snapshot=tab.snapshot, enabled=lambda: True)
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._watch, daemon=True)
+
+    def _watch(self) -> None:
+        while not self._stop.is_set():
+            self._stop.wait(self._announcer.check_once())
+
+    def __enter__(self):
+        self._thread.start()
+        time.sleep(1.5)  # let it take its first look at the tab before anything runs
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self._stop.set()
+        self._thread.join(timeout=5)
 
 
 class Offline:
@@ -459,8 +505,9 @@ def demo_steps(step: Callable, recorder: "Recorder") -> None:
     """--demo-mode: rehearse Demo mode offline, then Undo, Reset, and the fallback order."""
     # Keep your settings file exactly as it was, even keys you never set.
     saved_file = settings.PATH.read_bytes() if settings.PATH.exists() else None
-    # Pre-rendering covers Marin in Smooth, so rehearse with those; your choices come back after.
-    settings.set("personality", personality.Mode.SMOOTH.value)
+    # Pre-rendering covers the Natural voice Marin in Brief, so rehearse with those; your choices come back after.
+    settings.set("style", personality.Mode.BRIEF.value)
+    settings.set("engine", "natural")
     settings.set("voice", prerender.VOICE)
     recording = demo.load_recording()
     try:
@@ -474,12 +521,13 @@ def demo_steps(step: Callable, recorder: "Recorder") -> None:
                 wait_for_job(90)
             spoken = recorder.since(current.mark)
             texts = [report.text for report in spoken]
-            live = [report for report in spoken if report.engine != "pre-rendered"]
+            live = [report for report in spoken if report.engine not in ("pre-rendered", "sounddevice", "sounddevice (muted)")]
             if live:
                 current.fail(f"{len(live)} line(s) weren't pre-rendered: {live[0].engine}: {live[0].text[:50]}")
+            texts = [text for text in texts if not text.startswith("♪")]  # the pass and fail sounds
             if not texts or texts[0] != demo.INTRO_LINE:
                 current.fail("it didn't start by saying it is a replay")
-            if not any("expected 21.60 but got 18.40" in text for text in texts):
+            if not any("Expected 21.60, got 18.40" in text for text in texts):
                 current.fail("the recorded failure wasn't announced")
             if not any(recording["codex"]["summary"] in text for text in texts):
                 current.fail("the recorded fix summary wasn't spoken")
@@ -501,7 +549,7 @@ def demo_steps(step: Callable, recorder: "Recorder") -> None:
                 wait_for_job(30)
             if not demo.demo_project_ready():
                 current.fail("the demo project didn't go back to its bug")
-            if any(r.engine != "pre-rendered" for r in recorder.since(current.mark)):
+            if any(r.engine != "pre-rendered" for r in recorder.since(current.mark) if not r.text.startswith("♪")):
                 current.fail("Undo's line wasn't pre-rendered")
 
         step("Undo demo fix (offline)", undo_demo)
@@ -525,12 +573,12 @@ def demo_steps(step: Callable, recorder: "Recorder") -> None:
         def fallback(current: Step) -> None:
             # Hide one recording: with no file and no network, the Mac voice must take over.
             line = demo.RESET_LINE
-            path = prerender.path_for(line)
+            path = prerender.path_for(line, voice.speed_choice())
             hidden = path.with_suffix(".hidden")
             path.rename(hidden)
             try:
                 with Offline():
-                    engine = voice.speak(line, mode=personality.Mode.SMOOTH)
+                    engine = voice.speak(line, mode=personality.Mode.BRIEF)
             finally:
                 hidden.rename(path)
             if engine != "macOS say":

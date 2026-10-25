@@ -1,4 +1,9 @@
-"""Runtime personality modes for spoken summaries."""
+"""Speaking styles: Brief (the default) and Friendly.
+
+Brief is for screen reader users, who often listen at two or three times normal
+speed: the status word first ("Failed."), then the file, line and exact cause.
+Friendly adds a warm opener and closer, like the old Smooth mode.
+"""
 
 from enum import Enum
 import random
@@ -9,8 +14,8 @@ from murmur import config, settings
 
 
 class Mode(str, Enum):
-    SMOOTH = "Smooth"
-    FOCUSED = "Focused"
+    BRIEF = "Brief"
+    FRIENDLY = "Friendly"
 
 
 _LOCK = threading.Lock()
@@ -57,17 +62,17 @@ _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
 
 def get_mode() -> Mode:
     try:
-        return Mode(settings.get("personality"))
+        return Mode(settings.get("style"))
     except (TypeError, ValueError):
-        return Mode.SMOOTH
+        return Mode.BRIEF
 
 
 def set_mode(mode: Mode | str) -> None:
-    settings.set("personality", Mode(mode).value)
+    settings.set("style", Mode(mode).value)
 
 
 def record_result(failed: bool) -> int:
-    """Track consecutive failures so Smooth can stay encouraging after a run."""
+    """Track consecutive failures so Friendly can stay encouraging after a run."""
     global _FAILURE_STREAK
     with _LOCK:
         _FAILURE_STREAK = _FAILURE_STREAK + 1 if failed else 0
@@ -105,9 +110,9 @@ def _with_closer(text: str, facts: str, options: tuple[str, ...]) -> str:
 
 
 def style_summary(facts: str, *, failed: bool) -> str:
-    """Add a small Smooth flourish, or leave Focused wording untouched."""
+    """Add a small Friendly flourish, or leave Brief wording untouched."""
     mode = get_mode()
-    if mode is Mode.FOCUSED:
+    if mode is Mode.BRIEF:
         return facts
 
     if failed and failure_streak() >= 3:
@@ -122,7 +127,7 @@ def style_summary(facts: str, *, failed: bool) -> str:
     return _with_closer(f"{opener} {facts}", facts, _SUCCESS_CLOSERS)
 
 
-_SMOOTH_DONE_LINES = (
+_FRIENDLY_DONE_LINES = (
     "All done, smooth as butter.",
     "All done, not a single snag.",
     "Finished, and clean as a whistle.",
@@ -132,32 +137,32 @@ _SMOOTH_DONE_LINES = (
 def done_line() -> str:
     """One short line for a long command that finished without errors."""
     global _LAST_DONE_LINE
-    if get_mode() is Mode.FOCUSED:
-        return "Done, no errors."
+    if get_mode() is Mode.BRIEF:
+        return "Done."
     with _LOCK:
-        choices = tuple(line for line in _SMOOTH_DONE_LINES if line != _LAST_DONE_LINE)
+        choices = tuple(line for line in _FRIENDLY_DONE_LINES if line != _LAST_DONE_LINE)
         _LAST_DONE_LINE = _RANDOM.choice(choices)
         return _LAST_DONE_LINE
 
 
-# Lines for Fix it. Smooth picks a random one (never the same twice in a row);
-# Focused always says the plain version.
+# Lines for Fix it. Friendly picks a random one (never the same twice in a row);
+# Brief always says the same short word or two.
 _FIX_LINES = {
     "working": (
         ("On it, give me a moment.", "Leave it with me.", "Rolling up my sleeves."),
-        "Working on a fix.",
+        "Fixing.",
     ),
     "still": (
         ("Still on it, hang tight.", "Still cooking, nearly there.", "Bear with me, still digging."),
-        "Still working.",
+        "Still fixing.",
     ),
     "fixed": (
         ("Patched it, cool cat.", "Fixed it up.", "All patched."),
-        "Fix applied.",
+        "Fixed.",
     ),
     "not_fixed": (
         ("Hmm, no fix this time.", "Ooh, that one beat me."),
-        "No fix made.",
+        "Not fixed.",
     ),
 }
 _LAST_FIX_LINE: dict[str, str] = {}
@@ -165,11 +170,11 @@ _LAST_FIX_LINE: dict[str, str] = {}
 
 def fix_line(kind: str) -> str:
     """One short Fix it line: "working", "still", "fixed" or "not_fixed"."""
-    smooth_options, focused = _FIX_LINES[kind]
-    if get_mode() is Mode.FOCUSED:
-        return focused
+    friendly_options, brief = _FIX_LINES[kind]
+    if get_mode() is Mode.BRIEF:
+        return brief
     with _LOCK:
-        choices = tuple(line for line in smooth_options if line != _LAST_FIX_LINE.get(kind))
+        choices = tuple(line for line in friendly_options if line != _LAST_FIX_LINE.get(kind))
         _LAST_FIX_LINE[kind] = _RANDOM.choice(choices)
         return _LAST_FIX_LINE[kind]
 
@@ -179,28 +184,22 @@ def sample_sentence() -> str:
 
 
 def sample_sentence_for(mode: Mode | str) -> str:
-    if Mode(mode) is Mode.SMOOTH:
+    if Mode(mode) is Mode.FRIENDLY:
         return "Ooh, Murmur is ready to roll, cool cat."
-    return "Murmur voice check is ready."
-
-
-def speech_speed(mode: Mode | str | None = None) -> float:
-    """Smooth talks a little brisker than normal; Focused stays at the normal speed."""
-    selected = Mode(mode) if mode is not None else get_mode()
-    return config.SMOOTH_SPEECH_SPEED if selected is Mode.SMOOTH else config.SPEECH_SPEED
+    return "Murmur voice check."
 
 
 def tts_instructions(mode: Mode | str | None = None) -> str:
     """Set a delivery style without asking the voice to change the text."""
     selected = Mode(mode) if mode is not None else get_mode()
-    if selected is Mode.SMOOTH:
+    if selected is Mode.FRIENDLY:
         return (
             "Warm, relaxed and a little playful, like a friendly radio host, at a natural, lively pace. "
             "Keep every word clear. Say file names naturally and read line numbers clearly. "
             "Do not add words or change the provided text."
         )
     return (
-        "Clear, calm, neutral, and unhurried. Keep every word easy to understand. "
+        "Clear, neutral and brisk, like a screen reader. Keep every word easy to understand. "
         "Say file names naturally and read line numbers plainly. "
         "Do not add words or change the provided text."
     )
