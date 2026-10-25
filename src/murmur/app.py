@@ -16,7 +16,7 @@ from murmur.decision import (
     decide,
     speech_failure_summary,
 )
-from murmur import fixer, hotkey, settings, watcher, welcome
+from murmur import captions, fixer, hotkey, settings, watcher, welcome
 from murmur.hotkey import start_hotkey_listener
 from murmur.monitor import AutoAnnouncer, FinishedCommand
 from murmur import personality
@@ -468,6 +468,8 @@ class MurmurApp(rumps.App):
         self.undo_item = rumps.MenuItem("Undo last fix")
         self.diff_item = rumps.MenuItem("Open last fix diff")
 
+        self.captions_item = rumps.MenuItem("Show captions", callback=self.toggle_captions)
+
         self.test_voice_item = rumps.MenuItem("Test voice", callback=self.test_voice)
         _speak_label(self.test_voice_item, "Test voice: speak a sample sentence")
         self.welcome_item = rumps.MenuItem("Replay welcome", callback=self.replay_welcome)
@@ -488,6 +490,7 @@ class MurmurApp(rumps.App):
                 self.personality_menu,
                 self.voice_menu,
                 self.tap_menu,
+                self.captions_item,
                 None,
                 self.test_voice_item,
                 self.welcome_item,
@@ -497,6 +500,7 @@ class MurmurApp(rumps.App):
         self._show_voice_choice()
         self._show_tap_choice()
         self._show_auto_choice()
+        self._show_captions_choice()
         self.show_fix_choices()
         rumps.events.before_start.register(self._label_menu_bar_item)
         # Fixes finish in the background, so check once a second whether to dim or light these up.
@@ -547,6 +551,18 @@ class MurmurApp(rumps.App):
         # The checkmark shows it visually; the spoken label says "on" or "off" in words.
         self.auto_item.state = int(on)
         _speak_label(self.auto_item, f"Auto-announce finished commands, {'on' if on else 'off'}")
+
+    def toggle_captions(self, _sender: object) -> None:
+        captions.CAPTIONS.set_enabled(not captions.enabled())
+        self._show_captions_choice()
+
+    def _show_captions_choice(self) -> None:
+        on = captions.enabled()
+        self.captions_item.state = int(on)
+        _speak_label(
+            self.captions_item,
+            f"Show captions: big on-screen text of what Murmur says, for the room. {'On' if on else 'Off'}",
+        )
 
     def _label_menu_bar_item(self) -> None:
         # The menu bar item itself only exists once the app is starting up.
@@ -634,6 +650,7 @@ def main() -> None:
     for warning in config.startup_warnings():
         print(warning, file=sys.stderr)
     voice.warm_up()  # open the OpenAI connection now, so the first line starts sooner
+    voice.on_speech(captions.CAPTIONS.heard)  # the caption window follows every word
     check_terminal_on_startup()
     check_codex_on_startup()
     start_hotkey()

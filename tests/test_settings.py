@@ -5,6 +5,7 @@ from murmur import settings
 
 def test_defaults_when_nothing_is_saved() -> None:
     assert settings.get("auto_announce") is True
+    assert settings.get("captions") is False
     assert settings.get("double_tap_key") == "right_command"
     assert settings.get("personality") == "Smooth"
     assert settings.get("voice") == "marin"
