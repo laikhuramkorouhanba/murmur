@@ -1,6 +1,8 @@
 # Murmur
 
-> **[PROBLEM STORY PLACEHOLDER — The project owner will write this story.]**
+When a blind developer runs a command, their screen reader reads every line of output, including progress bars, colour codes and long stack traces. The line that matters can be buried. I built Murmur so they hear what matters first in one short sentence. They can fix the error with Codex in one shortcut.
+
+Demo video: (link coming)
 
 **Built with:** Python, rumps, OpenAI (`gpt-4o-mini-tts`, Marin voice), and Codex CLI for Fix it.
 
