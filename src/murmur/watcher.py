@@ -1,5 +1,6 @@
 """Read the selected tab's history from an already-open Terminal.app window."""
 
+import os
 import re
 import subprocess
 from dataclasses import dataclass
@@ -147,17 +148,21 @@ def tab_snapshot() -> TabSnapshot | None:
     return TabSnapshot(tty=tty, busy=busy == "true", processes=processes)
 
 
-def _tab_history_script(tty: str) -> str:
+def _tab_script(tty: str, what: str) -> str:
+    """AppleScript that reads one thing ("history" or "contents") from the tab with this tty."""
     # The tty only ever looks like /dev/ttys003, but we still refuse anything odd
     # before putting it inside AppleScript.
     if not re.fullmatch(r"/dev/ttys\d+", tty):
         raise RuntimeError(f"Murmur will not read an unexpected Terminal tab name: {tty!r}")
+    # We count through tabs by number on purpose. With "repeat with theTab in tabs",
+    # AppleScript reads "contents of theTab" as "unwrap the loop variable" and hands
+    # back the tab itself instead of its screen text (found in the M5 live test).
     return f'''
 tell application "Terminal"
-    repeat with theWindow in windows
-        repeat with theTab in tabs of theWindow
-            if tty of theTab is "{tty}" then
-                return history of theTab
+    repeat with w from 1 to count of windows
+        repeat with t from 1 to count of tabs of window w
+            if tty of tab t of window w is "{tty}" then
+                return {what} of tab t of window w
             end if
         end repeat
     end repeat
@@ -166,12 +171,59 @@ end tell
 '''
 
 
+def _tab_history_script(tty: str) -> str:
+    return _tab_script(tty, "history")
+
+
 def get_tab_text(tty: str) -> str:
     """Return the scrollback of one particular tab, even if it is no longer in front."""
     result = _run_osascript(_tab_history_script(tty), "read that Terminal tab's history")
     if result.stdout.strip() == _NO_TAB:
         raise RuntimeError("That Terminal tab was closed before Murmur could read it.")
     return result.stdout
+
+
+def get_tab_contents(tty: str) -> str:
+    """Return just what's on screen in that tab right now: much smaller than the history."""
+    result = _run_osascript(_tab_script(tty, "contents"), "read that Terminal tab's screen")
+    if result.stdout.strip() == _NO_TAB:
+        raise RuntimeError("That Terminal tab was closed before Murmur could read it.")
+    return result.stdout
+
+
+def tty_output_time(tty: str) -> float | None:
+    """When the tab last printed anything, from the tty device's modified time.
+
+    This is just a file check, with no AppleScript, so it's free to ask often.
+    The time moves whenever something is printed and stays still while the tab is quiet.
+    """
+    if not re.fullmatch(r"/dev/ttys\d+", tty):
+        return None
+    try:
+        return os.stat(tty).st_mtime
+    except OSError:
+        return None
+
+
+def finished_command_on_screen(screen: str) -> str | None:
+    """If the screen ends with a fresh, empty prompt right after a command, return that command.
+
+    "shop % pytest -q / ...output... / shop % " gives "pytest -q". A half-typed
+    command, a cleared screen, or pressing Enter on an empty prompt gives None.
+    """
+    lines = [line.rstrip() for line in screen.split("\n")]
+    while lines and not lines[-1]:
+        lines.pop()
+    if not lines:
+        return None
+    last = _ZSH_PROMPT.match(lines[-1])
+    if not last or last.group("rest").strip():
+        return None  # no prompt at the bottom, or you're typing at it
+    for line in reversed(lines[:-1]):
+        match = _ZSH_PROMPT.match(line)
+        if match:
+            return match.group("rest").strip() or None
+    return None
 
 
 _SHELLS = {"zsh", "bash", "fish", "sh"}

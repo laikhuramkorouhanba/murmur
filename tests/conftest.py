@@ -1,6 +1,6 @@
 import pytest
 
-from murmur import app, fixer, settings
+from murmur import app, fixer, settings, watcher
 
 
 @pytest.fixture(autouse=True)
@@ -17,6 +17,13 @@ def no_real_terminal_lookups(monkeypatch):
     """Tests never ask the real Terminal or ps/lsof which tab or folder a failure came from."""
     monkeypatch.setattr(app, "_lookup_front_tty", lambda: None)
     monkeypatch.setattr(app, "_lookup_folder", lambda tty: None)
+    # The quick-command check must never stat a real tty or read a real tab's screen in tests.
+    monkeypatch.setattr(watcher, "tty_output_time", lambda tty: None)
+
+    def no_screen(tty):
+        raise RuntimeError("tests never read a real Terminal screen")
+
+    monkeypatch.setattr(watcher, "get_tab_contents", no_screen)
     fixer.forget_failure()
     fixer.remember_fix(None)
     yield

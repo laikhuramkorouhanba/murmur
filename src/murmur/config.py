@@ -86,7 +86,10 @@ FIX_STILL_ON_IT_SECONDS = 30  # after this long, also say one short "still on it
 FIX_MAX_ERROR_CHARS = 12000
 
 # Auto-announce: how often we peek at Terminal, and how we treat finished commands.
-AUTO_POLL_SECONDS = 1.0
+AUTO_POLL_SECONDS = 0.25  # the free tty check runs this often
+AUTO_SNAPSHOT_SECONDS = 1.0  # asking Terminal "busy?" costs about 0.2 s, so only once a second
+AUTO_QUIET_SECONDS = 0.5  # after output stops for this long, look at the screen once
+AUTO_SAME_FINISH_SECONDS = 3.0  # both checks seeing one command within this time count once
 AUTO_ERROR_POLL_SECONDS = 5.0  # slower while something is wrong, so errors don't spam
 AUTO_SHORT_SECONDS = 2.0  # quicker than this and successful: stay silent
 AUTO_LONG_SUCCESS_SECONDS = 15.0  # this long and successful: say one short line

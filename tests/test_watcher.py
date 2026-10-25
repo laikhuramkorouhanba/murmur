@@ -165,7 +165,7 @@ def test_reads_a_specific_tab_by_its_tty(monkeypatch) -> None:
     )
 
     assert watcher.get_tab_text("/dev/ttys007") == "% make\nok\n"
-    assert 'if tty of theTab is "/dev/ttys007"' in scripts[0]
+    assert 'if tty of tab t of window w is "/dev/ttys007"' in scripts[0]
 
 
 def test_closed_tab_gives_a_clear_message(monkeypatch) -> None:
