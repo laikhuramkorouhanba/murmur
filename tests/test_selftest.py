@@ -38,8 +38,8 @@ def test_table_shows_result_engine_first_audio_and_wrapped_text() -> None:
     selftest.print_table([step, broken], out)
 
     table = out.getvalue()
-    assert "Auto-announce failure     PASS    8.6 s    OpenAI                0.6 s" in table
-    assert "Undo last fix             FAIL" in table
+    assert "Auto-announce failure            PASS    8.6 s    OpenAI                0.6 s" in table
+    assert "Undo last fix                    FAIL" in table
     assert "✗ Undo didn't say it was done" in table
     assert "1 of 2 steps passed." in table
     assert all(len(line) < 160 for line in table.splitlines())
