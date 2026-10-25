@@ -60,6 +60,7 @@ This makes `dist/Murmur.app` with PyInstaller. It runs without a terminal, lives
 - **⌘⌥⇧M** reads the latest Terminal output. Press it again to stop speech.
 - Tap **Right Command** twice to read the output. The menu lets you choose Right Option or Right Shift instead. Repeat the double tap to stop speech.
 - **⌘⌥⇧F** fixes the latest failure. Press it again while a fix is running to cancel and roll back its changes.
+- **⌘⌥⇧R** reads the full cleaned output aloud, word for word, always in the plain Focused style. File places such as `shop.py:9:5` are spoken as "shop.py, line 9, column 5". Press any Murmur shortcut to stop.
 
 Automatic announcements are on by default. Turn **Auto-announce finished commands** off in the menu to pause them.
 
