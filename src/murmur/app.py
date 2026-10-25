@@ -281,6 +281,27 @@ def start_auto_announcer() -> AutoAnnouncer:
     return _AUTO_ANNOUNCER
 
 
+def _run_fix_job() -> None:
+    global _JOB_ACTIVE
+    try:
+        fixer.fix_last_failure(_JOB_CANCELLED)
+    finally:
+        with _JOB_LOCK:
+            _JOB_ACTIVE = False
+
+
+def start_fix() -> bool:
+    """Ask Codex to fix the last failure in the background.
+
+    It shares the job lock, so pressing a Murmur shortcut while Codex works
+    cancels the fix (and puts back anything it half-changed).
+    """
+    started = _start_background_job(_run_fix_job, "murmur-fix")
+    if not started:
+        print("Fix it skipped: Murmur is busy. Press a shortcut to stop it first.")
+    return started
+
+
 def start_test_voice() -> bool:
     """Speak the selected mode's sample sentence in the background."""
     return _start_background_job(_run_test_voice_job, "murmur-test-voice")

@@ -140,6 +140,40 @@ def done_line() -> str:
         return _LAST_DONE_LINE
 
 
+# Lines for Fix it. Smooth picks a random one (never the same twice in a row);
+# Focused always says the plain version.
+_FIX_LINES = {
+    "working": (
+        ("On it, give me a moment.", "Leave it with me.", "Rolling up my sleeves."),
+        "Working on a fix.",
+    ),
+    "still": (
+        ("Still on it, hang tight.", "Still cooking, nearly there.", "Bear with me, still digging."),
+        "Still working.",
+    ),
+    "fixed": (
+        ("Patched it, cool cat.", "Fixed it up.", "All patched."),
+        "Fix applied.",
+    ),
+    "not_fixed": (
+        ("Hmm, no fix this time.", "Ooh, that one beat me."),
+        "No fix made.",
+    ),
+}
+_LAST_FIX_LINE: dict[str, str] = {}
+
+
+def fix_line(kind: str) -> str:
+    """One short Fix it line: "working", "still", "fixed" or "not_fixed"."""
+    smooth_options, focused = _FIX_LINES[kind]
+    if get_mode() is Mode.FOCUSED:
+        return focused
+    with _LOCK:
+        choices = tuple(line for line in smooth_options if line != _LAST_FIX_LINE.get(kind))
+        _LAST_FIX_LINE[kind] = _RANDOM.choice(choices)
+        return _LAST_FIX_LINE[kind]
+
+
 def sample_sentence() -> str:
     if get_mode() is Mode.SMOOTH:
         return "Ooh, Murmur is ready to roll, cool cat."

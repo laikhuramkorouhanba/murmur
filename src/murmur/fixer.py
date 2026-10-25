@@ -20,7 +20,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from murmur import config
+from murmur import config, personality
 
 
 @dataclass(frozen=True)
@@ -111,9 +111,26 @@ def changed_files(root: Path, before: str, after: str) -> list[tuple[str, str]]:
     return [(line[0], line.split("\t", 1)[1]) for line in lines if "\t" in line]
 
 
-def diff_text(root: Path, before: str, after: str) -> str:
-    """The exact change, line by line, the same as `git diff` shows."""
-    return _git(root, "diff", "--no-color", before, after)
+def diff_text(root: Path, before: str, after: str, paths: list[str] | None = None) -> str:
+    """The exact change, line by line, the same as `git diff` shows. Optionally just some files."""
+    return _git(root, "diff", "--no-color", before, after, "--", *(paths or []))
+
+
+# Files that tools make on their own when tests run. They aren't part of the fix,
+# so we don't read them out or print their (binary) diffs. Undo still cleans them up.
+_JUNK_FOLDERS = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", "node_modules"}
+_JUNK_SUFFIXES = (".pyc", ".pyo")
+_JUNK_NAMES = {".DS_Store", ".coverage"}
+
+
+def is_junk(path: str) -> bool:
+    """True for cache files like __pycache__/shop.cpython-313.pyc."""
+    parts = Path(path).parts
+    return (
+        any(part in _JUNK_FOLDERS for part in parts[:-1])
+        or path.endswith(_JUNK_SUFFIXES)
+        or (bool(parts) and parts[-1] in _JUNK_NAMES)
+    )
 
 
 def undo(root: Path, before: str, after: str) -> list[str]:
@@ -287,3 +304,183 @@ def run_codex(
             )
         except (OSError, ValueError, KeyError) as error:
             raise FixRefused(f"Codex finished, but its answer was unreadable ({error}).")
+
+
+# ---------------------------------------------------------------------------
+# The Fix job: everything that happens after you ask for a fix.
+# ---------------------------------------------------------------------------
+
+DIFF_PATH = Path.home() / ".murmur" / "last_fix.diff"  # the last fix's exact change, to read in full
+LOG_PATH = Path.home() / ".murmur" / "last_fix_codex.log"  # what Codex printed, for debugging
+
+
+@dataclass(frozen=True)
+class LastFix:
+    """What Undo needs: the project and its snapshots from before and after the fix."""
+
+    root: Path
+    before: str
+    after: str
+    files: list[str]  # the real files Codex changed (cache files left out)
+
+
+_LAST_FIX: LastFix | None = None
+
+
+def remember_fix(fix: LastFix | None) -> None:
+    global _LAST_FIX
+    with _LOCK:
+        _LAST_FIX = fix
+
+
+def last_fix() -> LastFix | None:
+    with _LOCK:
+        return _LAST_FIX
+
+
+def _say(text: str) -> None:
+    from murmur import voice  # imported here so tests of the safety bits never load audio
+
+    print(f"Murmur says: {text}")
+    voice.speak(text, mode=personality.get_mode())
+
+
+def _tick() -> None:
+    from murmur import voice
+
+    voice.play_soft_sound()
+
+
+class _Progress:
+    """Keeps you company while Codex works.
+
+    Right away: a short "working on it" line (Codex has already started, so no time is lost).
+    Every FIX_TICK_SECONDS: a quiet tick.
+    Once, after FIX_STILL_ON_IT_SECONDS: one short "still on it" line instead of that tick.
+    """
+
+    def __init__(self, cancel: threading.Event, say: Callable[[str], None], tick: Callable[[], None]):
+        self.cancel = cancel
+        self.say = say
+        self.tick = tick
+        self.cue_said = False
+        self.still_said = False
+        self.next_tick = config.FIX_TICK_SECONDS
+
+    def __call__(self, elapsed: float) -> None:
+        if self.cancel.is_set():
+            return
+        if not self.cue_said:
+            self.cue_said = True
+            self.say(personality.fix_line("working"))
+        elif not self.still_said and elapsed >= config.FIX_STILL_ON_IT_SECONDS:
+            self.still_said = True
+            self.say(personality.fix_line("still"))
+            self.next_tick = elapsed + config.FIX_TICK_SECONDS
+        elif elapsed >= self.next_tick:
+            self.tick()
+            self.next_tick += config.FIX_TICK_SECONDS
+
+
+def _file_list(paths: list[str]) -> str:
+    """Up to three plain file names, like "shop.py, cart.py and tax.py and 2 more"."""
+    names = [Path(path).name for path in paths]
+    shown = names[:3]
+    text = shown[0] if len(shown) == 1 else f"{', '.join(shown[:-1])} and {shown[-1]}"
+    if len(names) > 3:
+        text += f" and {len(names) - 3} more"
+    return text
+
+
+def spoken_fix_summary(files: list[str], answer: CodexAnswer) -> str:
+    """What Murmur says after a fix: opener, files, Codex's sentence, and how to undo."""
+    parts = [personality.fix_line("fixed"), f"Changed {_file_list(files)}.", answer.summary]
+    if answer.verified:
+        parts.append("The command passes now.")
+    parts.append("Undo last fix is in the Murmur menu.")
+    return " ".join(part for part in parts if part)
+
+
+def _roll_back(root: Path, before: str) -> bool:
+    """Put back anything Codex half-changed. True if the project is as it was."""
+    try:
+        undo(root, before, snapshot(root))
+        return True
+    except FixRefused as error:
+        print(f"Murmur Fix it: could not roll back ({error})")
+        return False
+
+
+def fix_last_failure(
+    cancel: threading.Event,
+    *,
+    say: Callable[[str], None] = _say,
+    tick: Callable[[], None] = _tick,
+    runner: Callable[..., CodexAnswer] = run_codex,
+    ready: Callable[[], str | None] = codex_ready,
+) -> LastFix | None:
+    """Ask Codex to fix the last failure, then say what changed. Returns the fix, or None."""
+    print("----- Murmur: Fix it -----")
+    try:
+        return _fix(cancel, say, tick, runner, ready)
+    finally:
+        print("----- End of Murmur Fix it -----")
+
+
+def _fix(cancel, say, tick, runner, ready) -> LastFix | None:
+    failure = last_failure()
+    if failure is None:
+        say("Nothing to fix. The last command didn't fail.")
+        return None
+    problem = ready()
+    if problem:
+        say(problem)
+        return None
+    try:
+        root = project_root(failure.folder)
+        before = snapshot(root)
+    except FixRefused as error:
+        say(f"{personality.fix_line('not_fixed')} {error}")
+        return None
+
+    print(f"Project: {root}")
+    print(f"Command that failed: {failure.command or '(unknown)'}")
+    started = time.monotonic()
+    try:
+        answer = runner(failure, root, cancel, on_tick=_Progress(cancel, say, tick), log_file=LOG_PATH)
+    except FixRefused as error:
+        print(f"Fix took {time.monotonic() - started:.1f} s.")
+        restored = _roll_back(root, before)
+        if not cancel.is_set():  # if you cancelled, you already know; stay quiet
+            ending = "Nothing was changed." if restored else "Some files may have changed; check git status."
+            say(f"{personality.fix_line('not_fixed')} {error} {ending}")
+        print(f"(stopped: {error})")
+        return None
+
+    print(f"Fix took {time.monotonic() - started:.1f} s.")
+    after = snapshot(root)
+    files = [path for _, path in changed_files(root, before, after) if not is_junk(path)]
+    print(f"Codex says: {answer.summary}")
+
+    if not answer.fixed or not files:
+        # Codex didn't find a safe fix. Put back anything it touched, so you get a clean slate.
+        _roll_back(root, before)
+        reason = answer.summary or "Codex didn't change any files."
+        say(f"{personality.fix_line('not_fixed')} {reason} Nothing was changed.")
+        return None
+
+    diff = diff_text(root, before, after, files)
+    print("----- Murmur: the exact change -----")
+    print(diff.rstrip())
+    try:
+        DIFF_PATH.parent.mkdir(parents=True, exist_ok=True)
+        DIFF_PATH.write_text(diff, encoding="utf-8")
+        print(f"(Saved to {DIFF_PATH})")
+    except OSError as error:
+        print(f"(Could not save the diff to {DIFF_PATH}: {error})")
+
+    fix = LastFix(root=root, before=before, after=after, files=files)
+    remember_fix(fix)
+    forget_failure()  # it's fixed now; don't let Fix it go after the same error twice
+    say(spoken_fix_summary(files, answer))
+    return fix
