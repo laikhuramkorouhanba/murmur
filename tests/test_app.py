@@ -1,3 +1,5 @@
+import pytest
+
 from murmur import app
 import rumps
 
@@ -169,3 +171,83 @@ def test_submenu_titles_show_the_current_choice_and_follow_changes() -> None:
     assert menu_app.personality_menu.title == "Personality: Focused"
     assert spoken(menu_app.read_item).endswith("or Right Option twice.")
     app.personality.set_mode(app.personality.Mode.SMOOTH)
+
+
+# --- the API key box -------------------------------------------------------
+
+
+class FakeKeyWindow:
+    """Stands in for rumps.Window: remembers how it was set up and answers like a person would."""
+
+    def __init__(self, clicked: int, text: str):
+        self.clicked, self.text = clicked, text
+        self.options = {}
+
+    def __call__(self, **options):
+        self.options = options
+        return self
+
+    def run(self):
+        return self
+
+
+def test_the_key_box_hides_the_key_and_saves_it(monkeypatch) -> None:
+    saved = []
+    monkeypatch.setattr(app.keychain, "save_key", saved.append)
+    monkeypatch.setattr(app.voice, "warm_up", lambda: None)
+    monkeypatch.setattr(app.config, "OPENAI_API_KEY", None)
+    window = FakeKeyWindow(1, "  sk-proj-abcdefghijklmnop  ")
+
+    assert app.ask_for_api_key(make_window=window)
+
+    assert window.options["secure"] is True
+    assert saved == ["sk-proj-abcdefghijklmnop"]
+    assert app.config.OPENAI_API_KEY == "sk-proj-abcdefghijklmnop"
+    assert app.config.API_KEY_SOURCE == "the Keychain"
+
+
+def test_cancelling_the_key_box_saves_nothing(monkeypatch) -> None:
+    monkeypatch.setattr(app.keychain, "save_key", lambda key: pytest.fail("nothing should be saved"))
+    window = FakeKeyWindow(0, "sk-proj-abcdefghijklmnop")
+
+    assert not app.ask_for_api_key(first_run=True, make_window=window)
+    assert window.options["cancel"] == "Use the Mac voice"
+
+
+def test_a_bad_key_is_explained_not_saved(monkeypatch) -> None:
+    alerts = []
+    monkeypatch.setattr(app.rumps, "alert", lambda **kwargs: alerts.append(kwargs))
+    monkeypatch.setattr(app.config, "OPENAI_API_KEY", None)
+
+    assert not app.ask_for_api_key(make_window=FakeKeyWindow(1, "hello"))
+
+    assert "start with sk-" in alerts[0]["message"]
+    assert app.config.OPENAI_API_KEY is None
+
+
+def test_first_run_asks_once_and_only_without_a_key(monkeypatch) -> None:
+    asked = []
+    monkeypatch.setattr(app, "ask_for_api_key", lambda **kwargs: asked.append(kwargs) or False)
+    monkeypatch.setattr(app.config, "OPENAI_API_KEY", None)
+
+    app.ask_for_api_key_if_first_run()
+    app.ask_for_api_key_if_first_run()
+
+    assert asked == [{"first_run": True}]
+
+
+def test_no_first_run_box_when_a_key_exists(monkeypatch) -> None:
+    monkeypatch.setattr(app, "ask_for_api_key", lambda **kwargs: pytest.fail("should not ask"))
+    monkeypatch.setattr(app.config, "OPENAI_API_KEY", "sk-already-here")
+
+    assert not app.ask_for_api_key_if_first_run()
+
+
+def test_key_status_names_where_the_key_came_from_but_never_the_key(monkeypatch) -> None:
+    monkeypatch.setattr(app.config, "OPENAI_API_KEY", "sk-secret-value")
+    monkeypatch.setattr(app.config, "API_KEY_SOURCE", "the Keychain")
+
+    status = app.api_key_status()
+
+    assert status == "Murmur: using the OpenAI API key from the Keychain."
+    assert "sk-" not in status

@@ -1,13 +1,39 @@
 """Small set of settings shared by Murmur's M2 features."""
 
 import os
+import sys
 
 from dotenv import load_dotenv
 
+from murmur import keychain
 
-load_dotenv()
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip() or None
+def is_packaged() -> bool:
+    """True inside the built Murmur.app (PyInstaller sets sys.frozen), False with `uv run`."""
+    return bool(getattr(sys, "frozen", False))
+
+
+def load_api_key() -> tuple[str | None, str | None]:
+    """Find the OpenAI key: the Keychain first, then .env (only when developing). Returns (key, where)."""
+    key = keychain.read_key()
+    if key:
+        return key, "the Keychain"
+    if not is_packaged():
+        # Developing with `uv run`: a .env file (or an exported variable) is fine.
+        load_dotenv()
+        key = os.getenv("OPENAI_API_KEY", "").strip()
+        if key:
+            return key, ".env"
+    return None, None
+
+
+OPENAI_API_KEY, API_KEY_SOURCE = load_api_key()
+
+
+def use_api_key(key: str, source: str) -> None:
+    """Switch to a new key straight away, without restarting Murmur."""
+    global OPENAI_API_KEY, API_KEY_SOURCE
+    OPENAI_API_KEY, API_KEY_SOURCE = key, source
 
 SUMMARY_MODEL = "gpt-4o-mini"
 SUMMARY_TEMPERATURE = 0
@@ -70,7 +96,7 @@ def startup_warnings(api_key: str | None = OPENAI_API_KEY) -> list[str]:
     """Return plain warnings without ever including the API key itself."""
     if not api_key:
         return [
-            "Murmur startup warning: OPENAI_API_KEY is missing; "
-            "Murmur will use the macOS voice."
+            "Murmur startup warning: no OpenAI API key found. Murmur will ask for one "
+            "(or use Set OpenAI API key… in the menu) and uses the macOS voice until then."
         ]
     return []

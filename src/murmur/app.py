@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
+from typing import Any
 
 from murmur import config, voice
 from murmur.cleaner import clean
@@ -16,7 +17,7 @@ from murmur.decision import (
     decide,
     speech_failure_summary,
 )
-from murmur import captions, fixer, hotkey, settings, watcher, welcome
+from murmur import captions, fixer, hotkey, keychain, settings, watcher, welcome
 from murmur.hotkey import start_hotkey_listener
 from murmur.monitor import AutoAnnouncer, FinishedCommand
 from murmur import personality
@@ -348,6 +349,66 @@ def open_last_fix_diff() -> bool:
     return True
 
 
+KEY_PROMPT_MESSAGE = (
+    "Paste your OpenAI API key. Murmur keeps it in your Mac's Keychain and only sends it to OpenAI. "
+    "Without a key, Murmur still works and speaks with the Mac voice."
+)
+
+
+def ask_for_api_key(*, first_run: bool = False, make_window: Callable[..., Any] = rumps.Window) -> bool:
+    """Show a secure text box for the API key and save it in the Keychain. True if saved."""
+    _bring_to_front()
+    window = make_window(
+        message=KEY_PROMPT_MESSAGE,
+        title="OpenAI API key",
+        default_text="",
+        ok="Save",
+        cancel="Use the Mac voice" if first_run else "Cancel",
+        dimensions=(360, 24),
+        secure=True,  # dots instead of letters, like a password
+    )
+    response = window.run()
+    if response.clicked != 1:
+        print("Murmur: no API key saved. Speech uses the Mac voice.")
+        return False
+    key = response.text.strip()
+    try:
+        keychain.save_key(key)
+    except ValueError as error:
+        print(f"Murmur: API key not saved. {error}")
+        rumps.alert(title="Key not saved", message=str(error))
+        return False
+    config.use_api_key(key, "the Keychain")
+    voice.forget_client()
+    voice.warm_up()
+    print("Murmur: API key saved in the Keychain. OpenAI speech and summaries are on.")
+    return True
+
+
+def _bring_to_front() -> None:
+    # Murmur has no Dock icon, so without this the box could open behind other windows.
+    try:
+        import AppKit
+
+        AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+    except Exception:
+        pass
+
+
+def ask_for_api_key_if_first_run() -> bool:
+    """On the very first start without a key, ask once. Afterwards it's in the menu."""
+    if config.OPENAI_API_KEY or settings.get("key_prompt_done"):
+        return False
+    settings.set("key_prompt_done", True)
+    return ask_for_api_key(first_run=True)
+
+
+def api_key_status() -> str:
+    if config.OPENAI_API_KEY:
+        return f"Murmur: using the OpenAI API key from {config.API_KEY_SOURCE}."
+    return "Murmur: no OpenAI API key yet, so speech uses the Mac voice."
+
+
 def check_codex_on_startup() -> None:
     """Say up front if Fix it can't work yet, instead of surprising you later."""
     problem = fixer.codex_ready()
@@ -470,6 +531,9 @@ class MurmurApp(rumps.App):
 
         self.captions_item = rumps.MenuItem("Show captions", callback=self.toggle_captions)
 
+        self.key_item = rumps.MenuItem("Set OpenAI API key…", callback=self.set_api_key)
+        _speak_label(self.key_item, "Set OpenAI API key: saved in your Mac's Keychain")
+
         self.test_voice_item = rumps.MenuItem("Test voice", callback=self.test_voice)
         _speak_label(self.test_voice_item, "Test voice: speak a sample sentence")
         self.welcome_item = rumps.MenuItem("Replay welcome", callback=self.replay_welcome)
@@ -492,6 +556,7 @@ class MurmurApp(rumps.App):
                 self.tap_menu,
                 self.captions_item,
                 None,
+                self.key_item,
                 self.test_voice_item,
                 self.welcome_item,
             ]
@@ -639,6 +704,9 @@ class MurmurApp(rumps.App):
     def read_last_output(self, _sender: object) -> None:
         start_announcement()
 
+    def set_api_key(self, _sender: object) -> None:
+        ask_for_api_key()
+
     def test_voice(self, _sender: object) -> None:
         start_test_voice()
 
@@ -649,6 +717,7 @@ class MurmurApp(rumps.App):
 def main() -> None:
     for warning in config.startup_warnings():
         print(warning, file=sys.stderr)
+    print(api_key_status())
     voice.warm_up()  # open the OpenAI connection now, so the first line starts sooner
     voice.on_speech(captions.CAPTIONS.heard)  # the caption window follows every word
     check_terminal_on_startup()
@@ -656,7 +725,16 @@ def main() -> None:
     start_hotkey()
     start_auto_announcer()
     welcome_if_first_run()
-    MurmurApp().run()
+    murmur_app = MurmurApp()
+    # The key box needs the app running, so ask a moment after it starts.
+    rumps.events.before_start.register(lambda: _later(1.0, ask_for_api_key_if_first_run))
+    murmur_app.run()
+
+
+def _later(seconds: float, work: Callable[[], object]) -> None:
+    from PyObjCTools import AppHelper
+
+    AppHelper.callLater(seconds, work)
 
 
 if __name__ == "__main__":

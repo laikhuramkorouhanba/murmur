@@ -16,6 +16,7 @@ DEFAULTS: dict[str, Any] = {
     "auto_announce": True,
     "captions": False,
     "double_tap_key": "right_command",
+    "key_prompt_done": False,  # asked for the API key once already
     "personality": "Smooth",
     "voice": "marin",
     "welcome_done": False,

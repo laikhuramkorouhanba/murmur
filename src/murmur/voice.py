@@ -101,6 +101,13 @@ def _openai_client() -> Any:
         return _CLIENT
 
 
+def forget_client() -> None:
+    """Drop the shared client, so the next line uses a newly saved API key."""
+    global _CLIENT
+    with _CLIENT_LOCK:
+        _CLIENT = None
+
+
 def warm_up() -> None:
     """Open the connection to OpenAI in the background at startup, so the first line starts sooner."""
     if not config.OPENAI_API_KEY:
