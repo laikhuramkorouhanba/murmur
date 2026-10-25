@@ -219,7 +219,7 @@ def _short(seconds: float | None) -> str:
 
 def print_table(steps: list[Step], out) -> None:
     headers = ("Step", "Result", "Time", "Engine", "1st audio", "Spoken text")
-    widths = (24, 6, 7, 20, 9)
+    widths = (31, 6, 7, 20, 9)
     text_width = 64
 
     def row(cells, spoken=""):
