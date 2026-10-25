@@ -26,5 +26,5 @@ git -C "${DEST_DIR}" \
     commit --quiet -m "Create Fix it demo project"
 
 printf 'Created the Fix it demo at %s\n' "${DEST_DIR}"
-printf 'Run its failing test with: uv run --project "%s/.." pytest -q "%s"\n' \
+printf 'Run its failing test with: uv run --project "%s/.." pytest -q "%s/shop_demo_check.py"\n' \
     "${SCRIPT_DIR}" "${DEST_DIR}"
