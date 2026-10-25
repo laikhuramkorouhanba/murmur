@@ -1,0 +1,14 @@
+{
+  "command": "uv run pytest -q shop_demo_check.py",
+  "output": "F                                                                        [100%]\n=================================== FAILURES ===================================\n_______________________ test_order_total_adds_sales_tax ________________________\n\n    def test_order_total_adds_sales_tax() -> None:\n        items = [(Decimal(\"20.00\"), 1)]\n    \n>       assert order_total(items, Decimal(\"0.08\")) == Decimal(\"21.60\")\nE       AssertionError: assert Decimal('18.40') == Decimal('21.60')\nE        +  where Decimal('18.40') = order_total([(Decimal('20.00'), 1)], Decimal('0.08'))\nE        +    where Decimal('0.08') = Decimal('0.08')\nE        +  and   Decimal('21.60') = Decimal('21.60')\n\nshop_demo_check.py:9: AssertionError\n=========================== short test summary info ============================\nFAILED shop_demo_check.py::test_order_total_adds_sales_tax - AssertionError: ...\n1 failed in 0.04s",
+  "codex": {
+    "fixed": true,
+    "summary": "Changed shop.py to add sales tax to the subtotal; the test rerun was blocked because uv could not access its cache.",
+    "verified": false
+  },
+  "codex_seconds": 11.1,
+  "files": [
+    "shop.py"
+  ],
+  "recorded": "2026-10-25"
+}
