@@ -78,24 +78,6 @@ def test_a_long_command_with_no_output_says_done(quiet_audio) -> None:
     assert quiet_audio["spoken"] == ["Done."]
 
 
-def test_errors_only_keeps_successes_to_the_pass_sound(quiet_audio) -> None:
-    settings.set("auto_detail", "errors")
-
-    run(LS, 0.3)
-    assert quiet_audio == {"spoken": [], "sounds": 0}  # quick: silent
-
-    run(LONG, 5.0)
-    assert quiet_audio["spoken"] == [] and quiet_audio["sounds"] == 1
-
-
-def test_everything_reads_long_output_too(quiet_audio) -> None:
-    settings.set("auto_detail", "everything")
-
-    run(LONG, 3.0)
-
-    assert "compiled part 0" in quiet_audio["spoken"][0] and "compiled part 29" in quiet_audio["spoken"][-1]
-
-
 def test_friendly_long_success_gets_an_opener(quiet_audio) -> None:
     personality.set_mode(personality.Mode.FRIENDLY)
 
@@ -145,23 +127,3 @@ def test_hotkey_still_stops_speech_during_an_auto_announcement(monkeypatch) -> N
 
     assert stops == [1]
     assert app._JOB_CANCELLED.is_set()
-
-
-def test_auto_announce_menu_saves_the_choice_and_says_it_in_words(capsys) -> None:
-    menu_app = app.MurmurApp()
-    assert menu_app.auto_items["short"].state == 1
-    assert str(menu_app.auto_menu._menuitem.accessibilityLabel()) == (
-        "Auto-announce, currently Errors and short output"
-    )
-
-    menu_app.choose_auto("errors")
-    assert settings.get("auto_detail") == "errors" and settings.get("auto_announce") is True
-    assert menu_app.auto_items["errors"].state == 1 and menu_app.auto_items["short"].state == 0
-
-    menu_app.choose_auto("off")
-
-    assert settings.get("auto_announce") is False
-    assert settings.get("auto_detail") == "errors"  # kept for when you turn it back on
-    assert menu_app.auto_items["off"].state == 1
-    assert menu_app.auto_menu.title == "Auto-announce: Off"
-    assert "Murmur auto-announce: off. Turn it on in the Murmur menu." in capsys.readouterr().out

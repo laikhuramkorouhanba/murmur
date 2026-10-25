@@ -101,67 +101,108 @@ def test_successful_hotkey_startup_prints_the_shortcut(monkeypatch, capsys) -> N
 
 
 def test_menu_title_displays_the_global_shortcut() -> None:
-    assert app.read_last_output_title() == "Read last output (⌘⌥⇧M)"
+    assert app.read_last_output_title() == "Read last result (⌘⌥⇧M)"
 
 
-def test_menu_registers_shortcut_label_and_test_voice_item() -> None:
+def test_the_menu_is_in_the_new_order() -> None:
     menu_app = app.MurmurApp()
-    for register in rumps.clicked.__dict__.get("*buttons", []):
-        register(menu_app)
 
-    assert menu_app.read_item.title == app.read_last_output_title()
-    assert "Test voice" in menu_app.menu
+    titles = [str(item.title()) for item in menu_app._menu._menu.itemArray()]
+    assert titles == [
+        "Read last result (⌘⌥⇧M)",
+        "Read everything (⌘⌥⇧R)",
+        "Fix last error (⌘⌥⇧F)",
+        "Undo last fix",
+        "",
+        "Voice: Mac voice",
+        "Speed",
+        "Auto-announce",
+        "Show captions",
+        "",
+        "Demo",
+        "More",
+    ]  # rumps adds "Quit Murmur" at the end when the app starts
+    assert list(menu_app.demo_menu.keys()) == ["Demo mode", "Reset demo project"]
+    assert list(menu_app.more_menu.keys()) == ["Set OpenAI API key…", "Show log"]
+    for gone in ("Test voice", "Style", "Double-tap key", "Replay welcome"):
+        assert gone not in menu_app.menu
 
 
-def test_double_tap_menu_saves_the_choice_and_updates_the_label() -> None:
+def test_voice_menu_offers_the_mac_voice_and_marin() -> None:
     menu_app = app.MurmurApp()
-    assert menu_app.tap_items["right_command"].state == 1
+    assert list(menu_app.voice_items) == ["mac", "natural"]
+    assert menu_app.voice_items["mac"].state == 1
 
-    menu_app.choose_double_tap("right_shift")
-
-    assert app.settings.get("double_tap_key") == "right_shift"
-    assert menu_app.tap_items["right_shift"].state == 1
-    assert menu_app.tap_items["right_command"].state == 0
-    assert menu_app.read_item.title == "Read last output (⌘⌥⇧M)"
-
-
-def test_voice_menu_saves_the_choice_and_marks_it() -> None:
-    menu_app = app.MurmurApp()
-    assert menu_app.voice_items["mac"].state == 1  # VoiceOver is off in tests, so the Mac voice
-
-    menu_app.choose_voice("cedar")
+    menu_app.choose_voice("natural")
 
     assert app.settings.get("engine") == "natural"
-    assert app.settings.get("voice") == "cedar"
-    assert app.voice.current_voice() == "cedar"
-    assert menu_app.voice_items["cedar"].state == 1
-    assert menu_app.voice_items["mac"].state == 0
-    assert menu_app.voice_menu.title == "Voice: Natural voice: Cedar"
-
-    menu_app.choose_voice("voiceover")
-    assert app.settings.get("engine") == "voiceover"
-    assert menu_app.voice_items["voiceover"].state == 1
-    assert menu_app.voice_menu.title == "Voice: VoiceOver (off, so Mac voice)"
+    assert menu_app.voice_items["natural"].state == 1 and menu_app.voice_items["mac"].state == 0
+    assert menu_app.voice_menu.title == "Voice: Natural voice"
+    assert spoken(menu_app.voice_menu) == "Voice, currently Natural voice"
 
 
-def test_speed_menu_saves_the_choice_and_marks_it() -> None:
+def test_the_speed_slider_saves_and_says_a_sample_when_settled(monkeypatch) -> None:
+    samples = []
+    monkeypatch.setattr(app, "start_speed_sample", lambda: samples.append(app.voice.speed()))
     menu_app = app.MurmurApp()
-    assert menu_app.speed_items["fast"].state == 1
-    assert menu_app.speed_menu.title == "Speed: Fast"
+    assert menu_app.speed_item._menuitem.view() is not None  # a real slider sits in the menu
+    assert abs(menu_app.speed_slider.slider.doubleValue() - 0.5) < 1e-9
 
-    menu_app.choose_speed("maximum")
+    menu_app.speed_changed(0.8)
+    menu_app.speed_settled(0.8)
 
-    assert app.settings.get("speed") == "maximum"
-    assert menu_app.speed_items["maximum"].state == 1 and menu_app.speed_items["fast"].state == 0
-    assert spoken(menu_app.speed_menu) == "Speed, currently Maximum"
+    assert app.settings.get("speed") == 0.8
+    assert samples == [0.8]
 
 
-def test_speed_menu_says_voiceover_keeps_its_own_rate(monkeypatch) -> None:
-    monkeypatch.setattr(app.voice, "voiceover_running", lambda: True)
-    menu_app = app.MurmurApp()
+def test_the_speed_slider_is_a_named_slider_voiceover_can_adjust(monkeypatch) -> None:
+    from murmur.slider import SpeedSlider
 
-    assert menu_app.voice_items["voiceover"].state == 1  # the default while VoiceOver runs
-    assert "VoiceOver uses its own rate" in spoken(menu_app.speed_menu)
+    changes, settled, later = [], [], []
+    slider = SpeedSlider(0.5, changes.append, settled.append, later=lambda _s, work: later.append(work), mouse_down=lambda: False)
+    cell = slider.slider.cell()
+
+    assert cell.accessibilityRole() == "AXSlider"
+    assert cell.accessibilityLabel() == "Speed"
+    assert cell.accessibilityValueDescription() == "50 percent"
+    cell.accessibilityPerformIncrement()  # what VoiceOver does to make it go up
+
+    assert changes and changes[-1] > 0.5
+    assert cell.accessibilityValueDescription() == f"{round(changes[-1] * 100)} percent"
+    for work in later:
+        work()
+    assert settled == [changes[-1]]  # one sample after the change settles
+
+
+def test_dragging_waits_until_you_let_go() -> None:
+    from murmur.slider import SpeedSlider
+
+    pressed = {"down": True}
+    settled, later = [], []
+    slider = SpeedSlider(0.5, lambda _p: None, settled.append, later=lambda _s, work: later.append(work), mouse_down=lambda: pressed["down"])
+
+    slider._changed(0.6)
+    slider._changed(0.7)
+    assert later == []  # still dragging
+    pressed["down"] = False
+    slider._changed(0.75)  # let go
+    for work in later:
+        work()
+
+    assert settled == [0.75]
+
+
+def test_arrow_keys_step_the_speed_and_say_so(monkeypatch) -> None:
+    said = []
+    monkeypatch.setattr(app, "_say_soon", said.append)
+
+    app.voice.set_speed(0.5)
+    assert app.change_speed(+1) == "Faster."
+    assert app.voice.speed() == 0.6
+    assert app.change_speed(-1) == "Slower."
+    app.voice.set_speed(1.0)
+    assert app.change_speed(+1) == "Fastest."
+    assert said == ["Faster.", "Slower.", "Fastest."]
 
 
 def spoken(item) -> str:
@@ -173,39 +214,18 @@ def test_every_menu_item_has_plain_spoken_words() -> None:
     menu_app = app.MurmurApp()
 
     assert spoken(menu_app.read_item) == (
-        "Read last output. Shortcut: Command Option Shift M, or double tap Right Command then Space."
+        "Read last result. Shortcut: Command Option Shift M, or double tap Right Command then Space."
     )
-    assert spoken(menu_app.personality_menu) == "Style, currently Brief"
+    assert spoken(menu_app.read_full_item).startswith("Read everything, the whole output word for word.")
     assert spoken(menu_app.voice_menu) == "Voice, currently Mac voice"
-    assert spoken(menu_app.voice_items["voiceover"]) == (
-        "VoiceOver: your own VoiceOver voice, rate and braille display"
-    )
     assert spoken(menu_app.voice_items["mac"]) == "Mac voice: fast, works offline"
-    assert spoken(menu_app.personality_items[app.personality.Mode.BRIEF]) == (
-        "Brief: status first, then file, line and exact cause"
-    )
-    assert spoken(menu_app.tap_menu) == "Double-tap key, currently Right Command"
-    assert spoken(menu_app.test_voice_item) == "Test voice: speak a sample sentence"
-    assert spoken(menu_app.welcome_item) == (
-        "Replay welcome: hear the shortcuts and missing permission help again"
-    )
-    assert spoken(menu_app.tap_items["right_shift"]) == "Right Shift: double tap it for the Murmur keys"
+    assert spoken(menu_app.voice_items["natural"]) == "Natural voice: Marin from OpenAI, needs the internet"
+    assert spoken(menu_app.auto_item).endswith("On")
+    assert spoken(menu_app.demo_menu) == "Demo: replay and reset the stage demo"
+    assert spoken(menu_app.more_menu) == "More: API key and log"
+    assert spoken(menu_app.key_item) == "Set OpenAI API key: saved in your Mac's Keychain"
+    assert spoken(menu_app.log_item) == "Show log: everything Murmur printed, in TextEdit"
     assert menu_app.quit_button.title == "Quit Murmur"
-
-
-def test_submenu_titles_show_the_current_choice_and_follow_changes() -> None:
-    menu_app = app.MurmurApp()
-    assert menu_app.voice_menu.title == "Voice: Mac voice"
-
-    menu_app.choose_voice("cedar")
-    menu_app.choose_double_tap("right_option")
-    menu_app.choose_friendly(None)
-
-    assert menu_app.voice_menu.title == "Voice: Natural voice: Cedar"
-    assert menu_app.tap_menu.title == "Double-tap key: Right Option"
-    assert menu_app.personality_menu.title == "Style: Friendly"
-    assert spoken(menu_app.read_item).endswith("or double tap Right Option then Space.")
-    app.personality.set_mode(app.personality.Mode.BRIEF)
 
 
 # --- the API key box -------------------------------------------------------

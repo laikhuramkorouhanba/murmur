@@ -144,8 +144,8 @@ def test_menu_item_sits_under_read_last_output_with_a_spoken_label() -> None:
     menu_app = app.MurmurApp()
     titles = list(menu_app.menu.keys())
 
-    assert titles[titles.index(app.read_last_output_title()) + 1] == "Read full output (⌘⌥⇧R)"
-    assert (
-        str(menu_app.read_full_item._menuitem.accessibilityLabel())
-        == "Read full output, word for word. Shortcut: Command Option Shift R"
+    assert titles[titles.index(app.read_last_output_title()) + 1] == "Read everything (⌘⌥⇧R)"
+    assert str(menu_app.read_full_item._menuitem.accessibilityLabel()) == (
+        "Read everything, the whole output word for word. Shortcut: Command Option Shift R, "
+        "or double tap Right Command then R"
     )

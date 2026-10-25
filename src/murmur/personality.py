@@ -61,6 +61,7 @@ _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
 
 
 def get_mode() -> Mode:
+    """Always Brief now. Friendly stays in the code for later, but isn't offered in the menu."""
     try:
         return Mode(settings.get("style"))
     except (TypeError, ValueError):

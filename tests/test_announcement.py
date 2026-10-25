@@ -62,19 +62,6 @@ def test_a_failure_plays_the_fail_sound_then_speaks_brief_words(monkeypatch) -> 
     assert heard == ["fail sound", "Failed. shop demo check dot py, line 9. Expected 21.60, got 18.40."]
 
 
-def test_voiceover_gets_the_real_file_name_for_braille(monkeypatch) -> None:
-    personality.set_mode(personality.Mode.BRIEF)
-    monkeypatch.setattr(app.voice, "engine", lambda: "voiceover")
-    spoken = []
-    monkeypatch.setattr(app.voice, "play_fail_sound", lambda: "sounddevice")
-    monkeypatch.setattr(app.voice, "speak", lambda text, **_kwargs: spoken.append(text) or "VoiceOver")
-    history = "me % python app.py\nTraceback (most recent call last):\n  File \"/srv/app_main.py\", line 3, in <module>\nNameError: name 'x' is not defined\nme % "
-
-    app.announce_last_output(read_text=lambda: history)
-
-    assert spoken == ["Failed. app_main.py, line 3. NameError: name 'x' is not defined"]
-
-
 def test_long_success_says_how_many_lines(monkeypatch) -> None:
     personality.set_mode(personality.Mode.BRIEF)
     lines = "\n".join(f"step {n} ok" for n in range(25))
@@ -222,15 +209,6 @@ def test_test_voice_uses_the_selected_mode_and_prints_engine(monkeypatch, capsys
         "Voice engine: OpenAI\n"
         "----- End of Murmur voice test -----\n"
     )
-
-
-def test_test_voice_menu_action_starts_its_background_job(monkeypatch) -> None:
-    starts = []
-    monkeypatch.setattr(app, "start_test_voice", lambda: starts.append(True))
-
-    app.MurmurApp.test_voice(None, None)
-
-    assert starts == [True]
 
 
 def test_assertion_failures_skip_the_summary_request(monkeypatch) -> None:

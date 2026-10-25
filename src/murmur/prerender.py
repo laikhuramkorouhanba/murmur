@@ -7,8 +7,8 @@ is saved as a small WAV file in src/murmur/audio/. Speaking tries, in order:
   2. live OpenAI speech
   3. the macOS `say` voice
 
-Only the Natural voice Marin in Brief style is pre-rendered, at each of the four
-speeds (VoiceOver and the Mac voice work offline anyway). Each file is named after a
+Only the Natural voice (Marin) is pre-rendered, at the default speed: a line said
+at another speed is spoken live (the Mac voice works offline anyway). Each file is named after a
 hash of everything that changes how it sounds (model, voice, style, speed and the
 exact words), so a changed line never plays an old recording: it just goes live.
 
@@ -23,28 +23,30 @@ import sys
 import wave
 from pathlib import Path
 
-from murmur import config, personality
+from murmur import config, personality, pronounce
 
 VOICE = "marin"
 MODE = personality.Mode.BRIEF
 SAMPLE_RATE = 24000  # what OpenAI's "pcm" format sends: 24 kHz, 16-bit, mono
 
 
-def key(text: str, speed: str) -> str:
+def key(text: str, speed: float) -> str:
+    # Named after the words as spoken (after the pronunciation pass), so a new pronunciation
+    # rule means a new recording, never an old one with the old sound.
     recipe = "\n".join(
-        (config.TTS_MODEL, VOICE, personality.tts_instructions(MODE), str(config.NATURAL_SPEEDS[speed]), text)
+        (config.TTS_MODEL, VOICE, personality.tts_instructions(MODE), f"{speed:.2f}", pronounce.spoken(text))
     )
     return hashlib.sha256(recipe.encode("utf-8")).hexdigest()[:20]
 
 
-def path_for(text: str, speed: str) -> Path:
+def path_for(text: str, speed: float) -> Path:
     return config.AUDIO_DIR / f"{key(text, speed)}.wav"
 
 
-def find(text: str, voice_name: str, mode: personality.Mode | str | None, speed: str) -> Path | None:
-    """The pre-rendered file for this exact line, or None (wrong voice or style, or not rendered)."""
+def find(text: str, voice_name: str, mode: personality.Mode | str | None, speed: float) -> Path | None:
+    """The pre-rendered file for this exact line, or None (wrong voice, style or speed, or not rendered)."""
     selected = personality.Mode(mode) if mode is not None else personality.get_mode()
-    if voice_name != VOICE or selected is not MODE or speed not in config.NATURAL_SPEEDS:
+    if voice_name != VOICE or selected is not MODE:
         return None
     path = path_for(text, speed)
     return path if path.exists() else None
@@ -53,7 +55,7 @@ def find(text: str, voice_name: str, mode: personality.Mode | str | None, speed:
 def scripted_lines() -> list[str]:
     """Every line Murmur speaks on its own, word for word the same each time, in Brief."""
     # Imported here so that loading this file stays light for voice.py.
-    from murmur import config as cfg, demo, fixer, welcome
+    from murmur import demo, fixer, welcome
     from murmur.cleaner import clean
     from murmur.decision import brief_failure
 
@@ -70,8 +72,7 @@ def scripted_lines() -> list[str]:
         demo.RESET_LINE,
         demo.INTRO_LINE,
     ]
-    for tap_name in cfg.DOUBLE_TAP_KEYS.values():
-        lines.append(welcome.welcome_text(MODE, app_name="Murmur", missing=[], tap=f"{tap_name} twice"))
+    lines.append(welcome.welcome_text(MODE, app_name="Murmur", missing=[], tap="Right Command twice"))
 
     # Demo mode's own lines, built by the same code that will speak them.
     recording = demo.load_recording()
@@ -82,24 +83,30 @@ def scripted_lines() -> list[str]:
     return sorted(set(lines))
 
 
-def wanted() -> list[tuple[str, str]]:
-    """Every (line, speed) pair that should have a file: each scripted line at each speed."""
-    return [(line, speed) for line in scripted_lines() for speed in config.NATURAL_SPEEDS]
+def default_speed() -> float:
+    """OpenAI's speed at the default slider position: the one speed we pre-render."""
+    low, high = config.NATURAL_SPEED_RANGE
+    return round(low + (high - low) * config.SPEED_DEFAULT, 2)
 
 
-def missing_lines() -> list[tuple[str, str]]:
+def wanted() -> list[tuple[str, float]]:
+    """Every (line, speed) pair that should have a file: each scripted line at the default speed."""
+    return [(line, default_speed()) for line in scripted_lines()]
+
+
+def missing_lines() -> list[tuple[str, float]]:
     return [(line, speed) for line, speed in wanted() if not path_for(line, speed).exists()]
 
 
-def render(text: str, speed: str, client) -> Path:
+def render(text: str, speed: float, client) -> Path:
     """Ask OpenAI for one line and save it as a WAV file."""
     audio = bytearray()
     with client.audio.speech.with_streaming_response.create(
         model=config.TTS_MODEL,
         voice=VOICE,
-        input=text,
+        input=pronounce.spoken(text),
         instructions=personality.tts_instructions(MODE),
-        speed=config.NATURAL_SPEEDS[speed],
+        speed=speed,
         response_format="pcm",
         timeout=60,
     ) as response:
@@ -127,7 +134,7 @@ def main(argv: list[str] | None = None) -> int:
     total = len(wanted())
     if options.check:
         for line, speed in missing:
-            print(f"missing ({config.SPEEDS[speed]}): {line}")
+            print(f"missing (speed {speed}): {line}")
         print(f"{total - len(missing)} of {total} files are pre-rendered.")
         return 1 if missing else 0
 
@@ -140,14 +147,14 @@ def main(argv: list[str] | None = None) -> int:
         client = voice._openai_client()
         for number, (line, speed) in enumerate(missing, 1):
             render(line, speed, client)
-            print(f"[{number}/{len(missing)}] ({config.SPEEDS[speed]}) {line}")
+            print(f"[{number}/{len(missing)}] (speed {speed}) {line}")
     if options.prune:
         names = {path_for(line, speed).name for line, speed in wanted()}
         for old in config.AUDIO_DIR.glob("*.wav"):
             if old.name not in names:
                 old.unlink()
                 print(f"removed unused {old.name}")
-    print(f"All {total} files ({len(scripted_lines())} lines at {len(config.NATURAL_SPEEDS)} speeds) are in {config.AUDIO_DIR}.")
+    print(f"All {total} lines (at speed {default_speed()}) are in {config.AUDIO_DIR}.")
     return 0
 
 if __name__ == "__main__":

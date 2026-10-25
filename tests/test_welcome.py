@@ -35,20 +35,11 @@ def test_welcome_is_short_and_explains_the_new_defaults() -> None:
     text = welcome.welcome_text(personality.Mode.BRIEF, app_name="Visual Studio Code", missing=[])
 
     assert text == (
-        "Murmur ready. Double tap Right Command, then Space repeats, R reads all, F fixes, U undoes. "
-        "Control stops speech. Backups: Command Option Shift M, F and R."
+        "Murmur ready. Double tap Right Command, then Space repeats, R reads all, F fixes, U undoes, "
+        "arrows change speed. Control stops speech."
     )
     assert "twice twice" not in text
     assert len(text.split()) <= 30
-
-
-def test_welcome_follows_the_double_tap_choice_and_style() -> None:
-    settings.set("double_tap_key", "right_shift")
-
-    text = welcome.welcome_text(personality.Mode.FRIENDLY, app_name="Terminal", missing=[])
-
-    assert "Double tap Right Shift, then" in text
-    assert text.startswith("Hey, Murmur here.")
 
 
 def test_welcome_says_which_permissions_are_still_missing() -> None:
@@ -105,16 +96,3 @@ def test_welcome_plays_on_first_run_only(monkeypatch, capsys) -> None:
     assert spoken == ["Welcome in Brief."]
     assert settings.get("welcome_done") is True
     assert "Welcome in Brief." in capsys.readouterr().out
-
-
-def test_replay_welcome_menu_item_plays_it_again(monkeypatch) -> None:
-    spoken = []
-    settings.set("welcome_done", True)
-    monkeypatch.setattr(app.threading, "Thread", RecordingThread)
-    monkeypatch.setattr(app.voice, "speak", lambda text, **_kwargs: (spoken.append(text) or "OpenAI"))
-    monkeypatch.setattr(app.welcome, "welcome_text", lambda mode: "Hello again.")
-
-    app.MurmurApp().replay_welcome(None)
-    run_started_jobs()
-
-    assert spoken == ["Hello again."]

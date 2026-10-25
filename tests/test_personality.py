@@ -75,27 +75,6 @@ def test_smooth_becomes_encouraging_after_three_failures() -> None:
     assert any(result.endswith(closer) for closer in personality._ENCOURAGING_CLOSERS)
 
 
-def test_menu_selects_and_marks_the_current_mode() -> None:
-    personality.set_mode(personality.Mode.FRIENDLY)
-    app = MurmurApp()
-    menu = app.menu["Style"]
-
-    assert menu["Friendly"].state == 1
-    assert menu["Brief"].state == 0
-
-    app.choose_brief(None)
-
-    assert personality.get_mode() is personality.Mode.BRIEF
-    assert settings.get("style") == "Brief"
-    assert menu["Friendly"].state == 0
-    assert menu["Brief"].state == 1
-
-    app.choose_friendly(None)
-    assert personality.get_mode() is personality.Mode.FRIENDLY
-    assert menu["Friendly"].state == 1
-    assert menu["Brief"].state == 0
-
-
 def _split(result: str, openers, closers) -> tuple[str, str]:
     opener = next(o for o in openers if result.startswith(o))
     closer = next(c for c in closers if result.endswith(c))

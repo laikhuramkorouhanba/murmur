@@ -2,7 +2,8 @@
 
 - Double tap one right-hand modifier key (Right Command by default): Murmur says
   "Murmur" and listens for one key for about 3 seconds. Space repeats, R reads the
-  full output, F fixes, U undoes, Escape cancels. That key never reaches Terminal.
+  full output, F fixes, U undoes, Escape cancels, and the Up and Down arrows make
+  speech faster or slower (as many presses as you like). That key never reaches Terminal.
 - Backups: ⌘⌥⇧M reads the last output, ⌘⌥⇧F fixes, ⌘⌥⇧R reads the full output.
 - Control on its own stops speech, like VoiceOver.
 
@@ -21,7 +22,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from murmur import config, settings
+from murmur import config
 
 
 # Which pynput key each "Double-tap key" menu choice means.
@@ -33,9 +34,8 @@ _TAP_KEY_NAMES = {
 
 
 def double_tap_choice() -> str:
-    """The saved double-tap key, or the default if the saved one is unknown."""
-    choice = settings.get("double_tap_key")
-    return choice if choice in config.DOUBLE_TAP_KEYS else settings.DEFAULTS["double_tap_key"]
+    """The double-tap key: always Right Command now (the menu choice was removed)."""
+    return "right_command"
 
 
 def double_tap_label() -> str:
@@ -76,6 +76,9 @@ class KeyLayer:
         with self._lock:
             self._until = self._clock() + self._seconds
         self._changed()
+        self._check_when_time_is_up()
+
+    def _check_when_time_is_up(self) -> None:
         # When the time is up, check again, so the swallowing tap goes off even if no key comes.
         timer = threading.Timer(self._seconds + 0.05, self._changed)
         timer.daemon = True
@@ -106,12 +109,16 @@ class KeyLayer:
                 return True  # the key is held down and repeating: keep it from Terminal too
             if not self._open_now():
                 return False
-            self._until = None  # one key per double tap
             command = config.KEY_LAYER_KEYS.get(code)
+            # One key per double tap, except the speed arrows: press them as often as you like.
+            keep_open = command in config.KEY_LAYER_KEEPS_OPEN
+            self._until = self._clock() + self._seconds if keep_open else None
             if command is not None:
                 self._held.add(code)
         if command is not None:
             self._on_command(command)
+        if keep_open:
+            self._check_when_time_is_up()
         self._changed()
         return command is not None
 

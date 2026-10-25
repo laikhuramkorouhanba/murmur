@@ -127,10 +127,10 @@ def test_fix_items_are_dimmed_and_say_why_when_there_is_nothing_to_do() -> None:
     menu_app = app.MurmurApp()
 
     assert menu_app.fix_item.title == "Fix last error (⌘⌥⇧F)"
-    for item in (menu_app.fix_item, menu_app.undo_item, menu_app.diff_item):
+    for item in (menu_app.fix_item, menu_app.undo_item):
         assert dimmed(item)
     assert spoken(menu_app.fix_item).endswith("Unavailable: no failed command to fix")
-    assert spoken(menu_app.undo_item) == "Undo last fix. Unavailable: no fix to undo"
+    assert spoken(menu_app.undo_item) == "Undo last fix. Shortcut: double tap Right Command then U. Unavailable: no fix to undo"
 
 
 def test_fix_items_light_up_when_they_can_be_used(tmp_path: Path) -> None:
@@ -141,17 +141,18 @@ def test_fix_items_light_up_when_they_can_be_used(tmp_path: Path) -> None:
 
     menu_app.show_fix_choices()
 
-    for item in (menu_app.fix_item, menu_app.undo_item, menu_app.diff_item):
+    for item in (menu_app.fix_item, menu_app.undo_item):
         assert not dimmed(item)
-    assert spoken(menu_app.fix_item) == "Fix last error with Codex. Shortcut: Command Option Shift F"
-    assert spoken(menu_app.diff_item) == "Open last fix diff in TextEdit"
+    assert spoken(menu_app.fix_item) == (
+        "Fix last error with Codex. Shortcut: Command Option Shift F, or double tap Right Command then F"
+    )
 
 
 def test_fix_items_sit_together_in_the_menu() -> None:
     titles = list(app.MurmurApp().menu.keys())
 
     start = titles.index("Fix last error (⌘⌥⇧F)")
-    assert titles[start : start + 3] == ["Fix last error (⌘⌥⇧F)", "Undo last fix", "Open last fix diff"]
+    assert titles[start : start + 2] == ["Fix last error (⌘⌥⇧F)", "Undo last fix"]
 
 
 def test_open_diff_uses_textedit(monkeypatch) -> None:

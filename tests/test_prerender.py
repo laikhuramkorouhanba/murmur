@@ -19,29 +19,31 @@ def write_wav(path, seconds: float = 0.2) -> None:
 
 
 def test_the_name_changes_with_the_words_and_the_speed() -> None:
-    first = prerender.key("Fixing.", "fast")
+    first = prerender.key("Fixing.", 1.9)
 
-    assert prerender.key("Fixing!", "fast") != first
-    assert prerender.key("Fixing.", "maximum") != first  # a new speed means a new recording
+    assert prerender.key("Fixing!", 1.9) != first
+    assert prerender.key("Fixing.", 3.0) != first  # a new speed means a new recording
 
 
 def test_only_marin_in_brief_is_pre_rendered() -> None:
     line = "Fixing."
-    write_wav(prerender.path_for(line, "fast"))
+    write_wav(prerender.path_for(line, 1.9))
 
-    assert prerender.find(line, "marin", "Brief", "fast") is not None
-    assert prerender.find(line, "marin", "Brief", "normal") is None  # that speed wasn't rendered here
-    assert prerender.find(line, "cedar", "Brief", "fast") is None
-    assert prerender.find(line, "marin", "Friendly", "fast") is None
-    assert prerender.find("Something never rendered.", "marin", "Brief", "fast") is None
+    assert prerender.find(line, "marin", "Brief", 1.9) is not None
+    assert prerender.find(line, "marin", "Brief", 1.0) is None  # that speed wasn't rendered here
+    assert prerender.find(line, "cedar", "Brief", 1.9) is None
+    assert prerender.find(line, "marin", "Friendly", 1.9) is None
+    assert prerender.find("Something never rendered.", "marin", "Brief", 1.9) is None
 
 
 def test_a_recording_is_played_instead_of_asking_openai(monkeypatch) -> None:
     voice.reset_stop()
+    monkeypatch.setattr(voice, "FADE_SECONDS", 0.0)  # compare the exact samples
+    monkeypatch.setattr(voice, "TAIL_SILENCE_SECONDS", 0.0)
     monkeypatch.setattr(config, "OPENAI_API_KEY", "test-key")
     settings.set("engine", "natural")
     line = "Fixing."
-    write_wav(prerender.path_for(line, "fast"))
+    write_wav(prerender.path_for(line, 1.9))
     stream = FakeOutputStream(samplerate=24000, channels=1, dtype="int16")
     monkeypatch.setattr(voice.sounddevice, "RawOutputStream", lambda **kwargs: stream)
     speech = FakeSpeechCreate(error=AssertionError("must not ask OpenAI"))
@@ -60,7 +62,7 @@ def test_a_broken_recording_falls_back_to_live_speech(monkeypatch, capsys) -> No
     monkeypatch.setattr(config, "OPENAI_API_KEY", "test-key")
     settings.set("engine", "natural")
     line = "Fixing."
-    path = prerender.path_for(line, "fast")
+    path = prerender.path_for(line, 1.9)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"not a wav file")
     monkeypatch.setattr(voice.sounddevice, "RawOutputStream", lambda **kwargs: FakeOutputStream(**kwargs))

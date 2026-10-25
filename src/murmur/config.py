@@ -51,18 +51,22 @@ VOICE = "marin"
 # OpenAI voices you can pick in the "Voice" menu.
 VOICES = {"marin": "Marin", "cedar": "Cedar"}
 
-# Who does the talking. Picked in the "Voice" menu; "auto" means VoiceOver when
-# it's running, and the Mac voice when it isn't.
-ENGINES = {"voiceover": "VoiceOver", "mac": "Mac voice", "natural": "Natural voice"}
+# Who does the talking, picked in the "Voice" menu: the Mac voice (the default:
+# fast, offline) or the Natural voice (OpenAI's Marin, needs the internet).
+# The VoiceOver engine and Cedar are left in the code for later, but not offered:
+# VoiceOver announcements from a menu bar app weren't spoken in a real test.
+ENGINES = {"mac": "Mac voice", "natural": "Natural voice"}
 
-# The "Speed" menu. Screen reader users often listen at two to three times normal speed.
-SPEEDS = {"normal": "Normal", "fast": "Fast", "very_fast": "Very fast", "maximum": "Maximum"}
-# OpenAI's speed (0.25 to 4). Measured on one sentence: 1.0 took 12.0 s, 1.5 took
-# 7.5 s, 2.0 took 5.3 s, 3.0 took 4.5 s. Above 3 it gains little and gets harder to follow.
-NATURAL_SPEEDS = {"normal": 1.0, "fast": 1.5, "very_fast": 2.0, "maximum": 3.0}
-# The Mac voice's rate in words per minute (say -r). Measured: it stops getting
-# faster at about 400, so asking for more than 450 changes nothing.
-MAC_VOICE_RATES = {"normal": 200, "fast": 300, "very_fast": 380, "maximum": 450}
+# The Speed slider goes from 0 (slowest) to 1 (fastest), and maps onto each voice's
+# real range. Measured: the Mac voice stops getting faster at about 400 words a
+# minute; OpenAI allows 0.25 to 4 but gains little above 3, and below 0.8 drags.
+SPEED_DEFAULT = 0.5
+SPEED_STEP = 0.1  # one Up or Down arrow in the Murmur key layer
+SPEED_ROUNDING = 0.05  # the slider snaps to steps this big, so pre-rendered lines can match
+MAC_VOICE_RATE_RANGE = (150, 420)  # say -r, words per minute
+NATURAL_SPEED_RANGE = (0.8, 3.0)  # OpenAI speed
+# Old saved presets, turned into slider positions when settings are migrated.
+OLD_SPEED_PRESETS = {"normal": 0.2, "fast": 0.5, "very_fast": 0.75, "maximum": 1.0}
 # VoiceOver never tells us when it has finished a line, so we wait about this long
 # per character before the next one, to avoid talking over it.
 VOICEOVER_SECONDS_PER_CHAR = 1 / 30
@@ -104,7 +108,10 @@ KEY_LAYER_KEYS = {
     3: "fix",  # F: fix the last error with Codex
     32: "undo",  # U: undo the last fix
     53: "cancel",  # Escape: close the layer and stop speech
+    126: "faster",  # Up arrow: one step faster (the layer stays open for more steps)
+    125: "slower",  # Down arrow: one step slower
 }
+KEY_LAYER_KEEPS_OPEN = frozenset({"faster", "slower"})
 
 # Fix it (Codex). Low reasoning effort keeps fixes quick on stage.
 FIX_TIMEOUT_SECONDS = 180

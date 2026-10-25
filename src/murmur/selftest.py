@@ -26,7 +26,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from murmur import app, demo, fixer, monitor, personality, prerender, settings, voice, watcher
+from murmur import app, config, demo, fixer, monitor, personality, prerender, settings, voice, watcher
 from murmur.watcher import TabSnapshot
 
 REPO = Path(__file__).resolve().parents[2]
@@ -281,7 +281,8 @@ def run(no_codex: bool, muted: bool, demo_mode: bool = False) -> int:
         say("Note: another Murmur is running. It may also speak about the test window.")
 
     voice.set_muted(muted)
-    recorder = Recorder()
+    global _RECORDER
+    recorder = _RECORDER = Recorder()
     voice.on_spoken(recorder)
     voice.on_speech(recorder.heard_start)
     scratch = Path(tempfile.mkdtemp(prefix="murmur-selftest-"))
@@ -295,7 +296,11 @@ def run(no_codex: bool, muted: bool, demo_mode: bool = False) -> int:
     # checks the default Brief wording and short-output reading, so it uses those.
     saved_settings = settings.PATH.read_bytes() if settings.PATH.exists() else None
     settings.set("style", personality.Mode.BRIEF.value)
-    settings.set("auto_detail", "short")
+    settings.set("auto_announce", True)
+    # If VoiceOver happens to be on, auto-announce would only play sounds. The test checks
+    # Murmur's words, so it pretends VoiceOver is off, except in the step that checks that rule.
+    real_voiceover_running = voice.voiceover_running
+    voice.voiceover_running = lambda: False
 
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     log = open(LOG_PATH, "w", encoding="utf-8")
@@ -452,12 +457,15 @@ def run(no_codex: bool, muted: bool, demo_mode: bool = False) -> int:
         step("Auto-announce short output (ls)", short_output)
 
         step("Key layer swallows its key", key_layer_check)
+        step("VoiceOver on: sounds only", voiceover_sounds_only)
+        step("Up arrow: faster", speed_arrow_check)
 
         if demo_mode:
             demo_steps(step, recorder)
     finally:
         sys.stdout, sys.stderr = sys.__stdout__, sys.__stderr__
         log.close()
+        voice.voiceover_running = real_voiceover_running
         if saved_settings is None:
             settings.PATH.unlink(missing_ok=True)
         else:
@@ -534,6 +542,43 @@ def key_layer_check(current: Step) -> None:
             Quartz.CFRunLoopStop(loop)
 
 
+def voiceover_sounds_only(current: Step) -> None:
+    """While VoiceOver runs, auto-announce plays the fail sound and says nothing."""
+    history = (
+        "me % pytest -q\nE       assert 1 == 2\nt.py:3: AssertionError\n1 failed in 0.01s\nme % "
+    )
+    real = voice.voiceover_running
+    voice.voiceover_running = lambda: True
+    try:
+        app.announce_finished_command(monitor.FinishedCommand("selftest", 1.0), read_text=lambda: history)
+    finally:
+        voice.voiceover_running = real
+    heard = [r.text for r in _RECORDER.since(current.mark)]
+    if heard != [voice.FAIL_SOUND_CAPTION]:
+        current.fail(f"expected just the fail sound, heard {heard}")
+    if not (app.last_spoken() or "").startswith("Failed."):
+        current.fail("the words weren't kept for Space in the Murmur keys")
+    current.note = "fail sound only; the words wait for double tap then Space"
+
+
+def speed_arrow_check(current: Step) -> None:
+    """Up arrow in the Murmur keys: one step faster, and Murmur says "Faster." at the new speed."""
+    before = voice.speed()
+    voice.set_speed(0.5)
+    app.run_layer_command("faster")
+    wait_for_job(10)
+    heard = [r.text for r in _RECORDER.since(current.mark)]
+    if abs(voice.speed() - 0.6) > 0.001:
+        current.fail(f"speed is {voice.speed()}, wanted 0.6")
+    if "Faster." not in heard:
+        current.fail(f"didn't say Faster. (heard {heard})")
+    current.note = f"slider 50% → 60%: Mac voice {voice.mac_voice_rate()} words a minute"
+    voice.set_speed(before)
+
+
+_RECORDER: "Recorder | None" = None
+
+
 class Announcing:
     """Run the real auto-announce chain on the test tab while inside this block."""
 
@@ -580,6 +625,7 @@ def demo_steps(step: Callable, recorder: "Recorder") -> None:
     settings.set("style", personality.Mode.BRIEF.value)
     settings.set("engine", "natural")
     settings.set("voice", prerender.VOICE)
+    settings.set("speed", config.SPEED_DEFAULT)  # the speed the lines are pre-rendered at
     recording = demo.load_recording()
     try:
         def demo_mode(current: Step) -> None:
@@ -644,7 +690,7 @@ def demo_steps(step: Callable, recorder: "Recorder") -> None:
         def fallback(current: Step) -> None:
             # Hide one recording: with no file and no network, the Mac voice must take over.
             line = demo.RESET_LINE
-            path = prerender.path_for(line, voice.speed_choice())
+            path = prerender.path_for(line, voice.natural_speed())
             hidden = path.with_suffix(".hidden")
             path.rename(hidden)
             try:

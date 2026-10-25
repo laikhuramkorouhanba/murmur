@@ -32,9 +32,8 @@ def welcome_text(
         outro = ""
 
     shortcuts = (
-        f"Double tap {tap.removesuffix(' twice')}, then Space repeats, R reads all, F fixes, U undoes. "
-        "Control stops speech. "
-        "Backups: Command Option Shift M, F and R."
+        f"Double tap {tap.removesuffix(' twice')}, then Space repeats, R reads all, F fixes, U undoes, "
+        "arrows change speed. Control stops speech."
     )
     permission_notes = []
     if "Automation" in missing:

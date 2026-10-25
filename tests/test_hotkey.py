@@ -130,26 +130,8 @@ def test_three_quick_taps_fire_only_once() -> None:
     assert fired == [1]
 
 
-def test_the_menu_choice_changes_the_tap_key_straight_away() -> None:
-    watcher, fired, clock = make_watcher()
-
-    hotkey.settings.set("double_tap_key", "right_shift")
-    tap(watcher, FakeKey.cmd_r, clock)
-    tap(watcher, FakeKey.cmd_r, clock)
-    assert fired == []
-
-    tap(watcher, FakeKey.shift_r, clock)
-    tap(watcher, FakeKey.shift_r, clock)
-    assert fired == [1]
-
-
-def test_labels_follow_the_saved_choice() -> None:
+def test_the_double_tap_key_is_always_right_command() -> None:
     assert hotkey.shortcuts_label() == "⌘⌥⇧M, or Right Command twice then Space"
-
-    hotkey.settings.set("double_tap_key", "right_option")
-    assert hotkey.double_tap_label() == "Right Option twice"
-
-    hotkey.settings.set("double_tap_key", "something_else")
     assert hotkey.double_tap_label() == "Right Command twice"
 
 

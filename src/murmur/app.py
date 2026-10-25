@@ -12,7 +12,6 @@ from murmur.cleaner import clean
 from murmur.decision import (
     AutoAction,
     auto_action,
-    auto_detail,
     brief_failure,
     contains_error,
     has_assertion_cause,
@@ -43,7 +42,7 @@ _AUTO_ANNOUNCER: AutoAnnouncer | None = None
 
 def read_last_output_title() -> str:
     """Menu label that always shows the shortcuts that work right now."""
-    return f"Read last output ({config.HOTKEY_LABEL})"
+    return f"Read last result ({config.HOTKEY_LABEL})"
 
 
 def print_last_output() -> None:
@@ -99,11 +98,9 @@ def _end(engine: str) -> None:
 def failure_words(cleaned: str) -> str:
     """What to say about a failure, in the chosen style."""
     if personality.get_mode() is personality.Mode.BRIEF:
-        # VoiceOver also drives braille displays, so it gets the real file names.
-        exact = voice.engine() == "voiceover"
         # Brief names the exact cause from the output; only a puzzle needs the summary request.
         summary = "" if has_exact_cause(cleaned) else summarise(cleaned)
-        return brief_failure(cleaned, summary, exact_names=exact)
+        return brief_failure(cleaned, summary)
     if has_assertion_cause(cleaned):
         # We can say "it expected X but got Y" ourselves, so skip the summary request:
         # its answer would be thrown away, and it costs one to two seconds.
@@ -113,10 +110,18 @@ def failure_words(cleaned: str) -> str:
     return personality.style_summary(facts, failed=True)
 
 
-def speak_output(cleaned: str, cancelled: threading.Event) -> str:
-    """Read output word for word (paths spelled out clearly), in pieces so a stop works quickly."""
+QUIET_ENGINE = "none (VoiceOver is on: sound only)"
+
+
+def speak_output(cleaned: str, cancelled: threading.Event, quiet: bool = False) -> str:
+    """Read output word for word (paths spelled out clearly), in pieces so a stop works quickly.
+
+    quiet: VoiceOver is running, so only remember the words (Space in the Murmur keys says them).
+    """
     words = readout.speakable(cleaned)
     _remember_spoken(words)
+    if quiet:
+        return QUIET_ENGINE
     return _speak_in_pieces(words, cancelled, personality.Mode.BRIEF)
 
 
@@ -143,8 +148,12 @@ def announce_last_output(
     read_text: Callable[[], str] | None = None,
     tty: str | None = None,
     folder: str | None = None,
+    quiet: bool = False,
 ) -> None:
     """Read, clean, decide, and speak on a worker thread (the hotkey, and errors from auto-announce).
+
+    quiet (auto-announce while VoiceOver runs): play the pass or fail sound only, so
+    Murmur never talks over VoiceOver. The words are kept for Space in the Murmur keys.
 
     - An error: the fail sound, then "Failed. shop.py, line 9. <exact cause>" (Brief).
     - A success: the pass sound, then short output word for word, or "Done, 42 lines."
@@ -176,11 +185,11 @@ def announce_last_output(
             print("(no output; just the pass sound)")
         elif is_short_output(cleaned):
             print("(short output, read word for word)")
-            engine = speak_output(cleaned, cancelled)
+            engine = speak_output(cleaned, cancelled, quiet)
         else:
             line = personality.style_summary(line_count_line(cleaned), failed=False)
             print(line)
-            engine = _say_line(line, cancelled)
+            engine = _say_line(line, cancelled, quiet)
         return _end(engine)
 
     spoken_text = failure_words(cleaned)
@@ -189,13 +198,15 @@ def announce_last_output(
     print("----- Murmur: spoken text -----")
     print(spoken_text)
     voice.play_fail_sound()
-    _end(_say_line(spoken_text, cancelled))
+    _end(_say_line(spoken_text, cancelled, quiet))
 
 
-def _say_line(text: str, cancelled: threading.Event) -> str:
+def _say_line(text: str, cancelled: threading.Event, quiet: bool = False) -> str:
     if cancelled.is_set():
         return "none (stopped)"
     _remember_spoken(text)
+    if quiet:
+        return QUIET_ENGINE
     return voice.speak(text, mode=personality.get_mode())
 
 
@@ -216,10 +227,13 @@ def announce_finished_command(
 
     cleaned = clean(last_command_output(history))
     _remember_output(cleaned)
-    action = auto_action(cleaned, finished.seconds, auto_detail())
+    action = auto_action(cleaned, finished.seconds)  # errors, plus short output read aloud
+    # VoiceOver users hear VoiceOver read the screen already, so Murmur only adds the
+    # pass or fail sound. Double tap Right Command, then Space, to hear Murmur's words.
+    quiet = voice.voiceover_running()
     if action is AutoAction.ANNOUNCE:
         # Errors get exactly what the hotkey gives, reusing the text we already read.
-        announce_last_output(cancelled, read_text=lambda: history, tty=finished.tty)
+        announce_last_output(cancelled, read_text=lambda: history, tty=finished.tty, quiet=quiet)
         return
 
     personality.record_result(False)
@@ -234,15 +248,15 @@ def announce_finished_command(
         engine = voice.play_pass_sound()
         if action is AutoAction.READ_OUTPUT:
             print(cleaned)
-            engine = speak_output(cleaned, cancelled)
+            engine = speak_output(cleaned, cancelled, quiet)
         elif action is AutoAction.LINE_COUNT:
             line = personality.style_summary(line_count_line(cleaned), failed=False)
             print(line)
-            engine = _say_line(line, cancelled)
+            engine = _say_line(line, cancelled, quiet)
         elif action is AutoAction.DONE_LINE:
             line = personality.done_line()
             print(line)
-            engine = _say_line(line, cancelled)
+            engine = _say_line(line, cancelled, quiet)
         else:
             print("(success; just the pass sound)")
     print(f"Voice engine: {engine}")
@@ -428,25 +442,9 @@ def start_auto_announcement(finished: FinishedCommand) -> bool:
     return started
 
 
-_AUTO_LABELS = {
-    "off": "Off: only speak when you ask",
-    "errors": "Errors only: speak about errors; successes get the pass sound",
-    "short": "Errors and short output: errors, plus short output read word for word",
-    "everything": "Everything: errors, and all output read word for word",
-}
-
-
-def auto_choice() -> str:
-    """The Auto-announce menu choice: "off", "errors", "short" or "everything"."""
-    return auto_detail() if settings.get("auto_announce") else "off"
-
-
 def auto_announce_status() -> str:
     if settings.get("auto_announce"):
-        return (
-            f"Murmur auto-announce: {config.AUTO_DETAILS[auto_detail()]}. "
-            "Murmur speaks up when a Terminal command finishes."
-        )
+        return "Murmur auto-announce: on. Murmur speaks up when a Terminal command finishes."
     return "Murmur auto-announce: off. Turn it on in the Murmur menu."
 
 
@@ -682,7 +680,7 @@ LAYER_CUE = "Murmur"
 
 
 def run_layer_command(command: str) -> None:
-    """One key after the double tap: "repeat", "read", "fix", "undo" or "cancel"."""
+    """One key after the double tap: "repeat", "read", "fix", "undo", "faster", "slower" or "cancel"."""
     print(f"Murmur keys: {command}")
     if command == "cancel":
         stop_talking()
@@ -695,6 +693,10 @@ def run_layer_command(command: str) -> None:
     elif command == "undo":
         if not start_undo():
             print("Undo skipped: Murmur is busy. Try again in a second.")
+    elif command == "faster":
+        change_speed(+1)
+    elif command == "slower":
+        change_speed(-1)
 
 
 def _run_repeat_job() -> None:
@@ -768,164 +770,99 @@ def _speak_label(item: rumps.MenuItem, label: str) -> None:
 
 
 def _read_last_output_label() -> str:
-    return (
-        "Read last output. Shortcut: "
-        f"{config.HOTKEY_SPOKEN}, or double tap {config.DOUBLE_TAP_KEYS[hotkey.double_tap_choice()]} then Space."
-    )
+    return f"Read last result. Shortcut: {config.HOTKEY_SPOKEN}, or double tap Right Command then Space."
 
 
-def _voice_choices() -> list[tuple[str, str, str]]:
-    """The Voice menu: (choice, title, what VoiceOver says for it)."""
-    choices = [
-        ("voiceover", "VoiceOver", "VoiceOver: your own VoiceOver voice, rate and braille display"),
-        ("mac", "Mac voice", "Mac voice: fast, works offline"),
-    ]
-    for name, title in config.VOICES.items():
-        choices.append((name, f"Natural voice: {title}", f"Natural voice {title}, from OpenAI, needs the internet"))
-    return choices
-
-
-def _current_voice_choice() -> str:
-    """Which Voice menu item gets the checkmark."""
-    chosen = voice.chosen_engine()
-    if chosen == "natural":
-        return voice.current_voice()
-    if chosen == "auto":
-        return voice.engine()  # VoiceOver if it's running, otherwise the Mac voice
-    return chosen
-
-
-def current_voice_name() -> str:
-    """Words for who is talking, like "Mac voice" or "Natural voice: Marin"."""
-    chosen = voice.chosen_engine()
-    if chosen == "natural":
-        return f"Natural voice: {config.VOICES[voice.current_voice()]}"
-    if chosen == "voiceover" and voice.engine() != "voiceover":
-        return "VoiceOver (off, so Mac voice)"
-    return config.ENGINES[voice.engine()]
-
-
-_PERSONALITY_LABELS = {
-    personality.Mode.BRIEF: "Brief: status first, then file, line and exact cause",
-    personality.Mode.FRIENDLY: "Friendly: warm and a little playful, a few more words",
+VOICE_CHOICES = {
+    "mac": ("Mac voice", "Mac voice: fast, works offline"),
+    "natural": ("Natural voice", "Natural voice: Marin from OpenAI, needs the internet"),
 }
 
 
 class MurmurApp(rumps.App):
     """The Murmur menu bar item and everything in its menu.
 
-    Every item has plain spoken words for VoiceOver, and each submenu's title
-    says the current choice, like "Voice: Marin", so you hear it without opening it.
+    Every item has plain spoken words for VoiceOver, and the Voice submenu's title
+    says the current choice ("Voice: Mac voice"), so you hear it without opening it.
     """
 
     def __init__(self) -> None:
+        global _MENU_APP
         super().__init__("Murmur", quit_button="Quit Murmur")
 
         self.read_item = rumps.MenuItem(read_last_output_title(), callback=self.read_last_output)
-        self.read_full_item = rumps.MenuItem(
-            f"Read full output ({config.READ_HOTKEY_LABEL})", callback=self.read_full
-        )
+        _speak_label(self.read_item, _read_last_output_label())
+        self.read_full_item = rumps.MenuItem(f"Read everything ({config.READ_HOTKEY_LABEL})", callback=self.read_full)
         _speak_label(
             self.read_full_item,
-            f"Read full output, word for word. Shortcut: {config.READ_HOTKEY_SPOKEN}",
+            f"Read everything, the whole output word for word. Shortcut: {config.READ_HOTKEY_SPOKEN}, "
+            "or double tap Right Command then R",
         )
-        # Auto-announce: off, or how much to say when a command finishes on its own.
-        self.auto_menu = rumps.MenuItem("Auto-announce")
-        self.auto_items = {}
-        for choice, name in (("off", "Off"), *config.AUTO_DETAILS.items()):
-            item = rumps.MenuItem(name, callback=self._auto_chooser(choice))
-            _speak_label(item, _AUTO_LABELS[choice])
-            self.auto_items[choice] = item
-            self.auto_menu.add(item)
 
-        self.personality_menu = rumps.MenuItem("Style")
-        self.personality_items = {}
-        for mode in personality.Mode:
-            item = rumps.MenuItem(mode.value, callback=self._personality_chooser(mode))
-            _speak_label(item, _PERSONALITY_LABELS[mode])
-            self.personality_items[mode] = item
-            self.personality_menu.add(item)
+        # Fix it. These two dim themselves when there's nothing for them to do.
+        self.fix_item = rumps.MenuItem(f"Fix last error ({config.FIX_HOTKEY_LABEL})")
+        self.undo_item = rumps.MenuItem("Undo last fix")
 
-        # Voice: VoiceOver, the Mac voice, or a Natural (OpenAI) voice. One list, one choice.
         self.voice_menu = rumps.MenuItem("Voice")
         self.voice_items = {}
-        for choice, name, label in _voice_choices():
+        for choice, (name, label) in VOICE_CHOICES.items():
             item = rumps.MenuItem(name, callback=self._voice_chooser(choice))
             _speak_label(item, label)
             self.voice_items[choice] = item
             self.voice_menu.add(item)
 
-        self.speed_menu = rumps.MenuItem("Speed")
-        self.speed_items = {}
-        for choice, name in config.SPEEDS.items():
-            item = rumps.MenuItem(name, callback=self._speed_chooser(choice))
-            self.speed_items[choice] = item
-            self.speed_menu.add(item)
+        # Speed: a real slider inside the menu. VoiceOver can adjust it like any slider.
+        self.speed_item = rumps.MenuItem("Speed")
+        self.speed_slider = None
+        try:
+            from murmur.slider import SpeedSlider
 
-        self.tap_menu = rumps.MenuItem("Double-tap key")
-        self.tap_items = {}
-        for choice, name in config.DOUBLE_TAP_KEYS.items():
-            item = rumps.MenuItem(name, callback=self._tap_chooser(choice))
-            _speak_label(item, f"{name}: double tap it for the Murmur keys")
-            self.tap_items[choice] = item
-            self.tap_menu.add(item)
+            self.speed_slider = SpeedSlider(voice.speed(), self.speed_changed, self.speed_settled)
+            self.speed_item._menuitem.setView_(self.speed_slider.view)
+        except Exception as error:  # never let the slider stop the menu from appearing
+            print(f"Murmur: the Speed slider couldn't be made ({error}). Use the Up and Down arrows instead.")
 
-        # Fix it. These three dim themselves when there's nothing for them to do.
-        self.fix_item = rumps.MenuItem(f"Fix last error ({config.FIX_HOTKEY_LABEL})")
-        self.undo_item = rumps.MenuItem("Undo last fix")
-        self.diff_item = rumps.MenuItem("Open last fix diff")
-
+        self.auto_item = rumps.MenuItem("Auto-announce", callback=self.toggle_auto)
         self.captions_item = rumps.MenuItem("Show captions", callback=self.toggle_captions)
-        self.demo_item = rumps.MenuItem("Demo mode (replay)", callback=self.demo_mode)
+
+        self.demo_menu = rumps.MenuItem("Demo")
+        _speak_label(self.demo_menu, "Demo: replay and reset the stage demo")
+        self.demo_item = rumps.MenuItem("Demo mode", callback=self.demo_mode)
         _speak_label(
             self.demo_item,
             "Demo mode: replay a recorded failure and fix, with captions. No Terminal or internet needed",
         )
         self.reset_demo_item = rumps.MenuItem("Reset demo project", callback=self.reset_demo)
         _speak_label(self.reset_demo_item, "Reset demo project: put the demo's bug back, ready to fix again")
+        self.demo_menu.add(self.demo_item)
+        self.demo_menu.add(self.reset_demo_item)
 
-        self.log_item = rumps.MenuItem("Show log", callback=self.show_log)
-        _speak_label(self.log_item, "Show log: everything Murmur printed, in TextEdit")
+        self.more_menu = rumps.MenuItem("More")
+        _speak_label(self.more_menu, "More: API key and log")
         self.key_item = rumps.MenuItem("Set OpenAI API key…", callback=self.set_api_key)
         _speak_label(self.key_item, "Set OpenAI API key: saved in your Mac's Keychain")
-
-        self.test_voice_item = rumps.MenuItem("Test voice", callback=self.test_voice)
-        _speak_label(self.test_voice_item, "Test voice: speak a sample sentence")
-        self.welcome_item = rumps.MenuItem("Replay welcome", callback=self.replay_welcome)
-        _speak_label(
-            self.welcome_item,
-            "Replay welcome: hear the shortcuts and missing permission help again",
-        )
+        self.log_item = rumps.MenuItem("Show log", callback=self.show_log)
+        _speak_label(self.log_item, "Show log: everything Murmur printed, in TextEdit")
+        self.more_menu.add(self.key_item)
+        self.more_menu.add(self.log_item)
 
         self.menu.update(
             [
                 self.read_item,
                 self.read_full_item,
-                self.auto_menu,
-                None,
                 self.fix_item,
                 self.undo_item,
-                self.diff_item,
                 None,
-                self.personality_menu,
                 self.voice_menu,
-                self.speed_menu,
-                self.tap_menu,
+                self.speed_item,
+                self.auto_item,
                 self.captions_item,
                 None,
-                self.demo_item,
-                self.reset_demo_item,
-                None,
-                self.key_item,
-                self.log_item,
-                self.test_voice_item,
-                self.welcome_item,
+                self.demo_menu,
+                self.more_menu,
             ]
         )
-        self._show_personality_choice()
         self._show_voice_choice()
-        self._show_speed_choice()
-        self._show_tap_choice()
         self._show_auto_choice()
         self._show_captions_choice()
         self.show_fix_choices()
@@ -933,6 +870,7 @@ class MurmurApp(rumps.App):
         # Fixes finish in the background, so check once a second whether to dim or light these up.
         self._fix_timer = rumps.Timer(lambda _timer: self.show_fix_choices(), 1)
         rumps.events.before_start.register(self._fix_timer.start)
+        _MENU_APP = self
 
     @staticmethod
     def _offer(item: rumps.MenuItem, callback, available: bool, label: str, why_not: str) -> None:
@@ -946,18 +884,15 @@ class MurmurApp(rumps.App):
             self.fix_item,
             self.fix_last_error,
             fixer.last_failure() is not None,
-            f"Fix last error with Codex. Shortcut: {config.FIX_HOTKEY_SPOKEN}",
+            f"Fix last error with Codex. Shortcut: {config.FIX_HOTKEY_SPOKEN}, or double tap Right Command then F",
             "no failed command to fix",
         )
         self._offer(
-            self.undo_item, self.undo_last_fix, fixer.last_fix() is not None, "Undo last fix", "no fix to undo"
-        )
-        self._offer(
-            self.diff_item,
-            self.open_last_fix_diff,
-            fixer.DIFF_PATH.exists(),
-            "Open last fix diff in TextEdit",
-            "Codex hasn't made a fix yet",
+            self.undo_item,
+            self.undo_last_fix,
+            fixer.last_fix() is not None,
+            "Undo last fix. Shortcut: double tap Right Command then U",
+            "no fix to undo",
         )
 
     def fix_last_error(self, _sender: object) -> None:
@@ -966,29 +901,19 @@ class MurmurApp(rumps.App):
     def undo_last_fix(self, _sender: object) -> None:
         start_undo()
 
-    def open_last_fix_diff(self, _sender: object) -> None:
-        open_last_fix_diff()
-
-    def _auto_chooser(self, choice: str) -> Callable[[object], None]:
-        def choose(_sender: object) -> None:
-            self.choose_auto(choice)
-
-        return choose
-
-    def choose_auto(self, choice: str) -> None:
-        """choice is "off", "errors", "short" or "everything"."""
-        settings.set("auto_announce", choice != "off")
-        if choice != "off":
-            settings.set("auto_detail", choice)
+    def toggle_auto(self, _sender: object) -> None:
+        settings.set("auto_announce", not settings.get("auto_announce"))
         self._show_auto_choice()
         print(auto_announce_status())
 
     def _show_auto_choice(self) -> None:
-        current = auto_choice()
-        for choice, item in self.auto_items.items():
-            item.state = int(choice == current)
-        name = "Off" if current == "off" else config.AUTO_DETAILS[current]
-        self._show_submenu_choice(self.auto_menu, "Auto-announce", name)
+        on = bool(settings.get("auto_announce"))
+        # The checkmark shows it visually; the spoken label says "on" or "off" in words.
+        self.auto_item.state = int(on)
+        _speak_label(
+            self.auto_item,
+            f"Auto-announce: errors, and short output read aloud, when a command finishes. {'On' if on else 'Off'}",
+        )
 
     def toggle_captions(self, _sender: object) -> None:
         captions.CAPTIONS.set_enabled(not captions.enabled())
@@ -1011,33 +936,6 @@ class MurmurApp(rumps.App):
         except AttributeError:
             pass
 
-    @staticmethod
-    def _show_submenu_choice(menu: rumps.MenuItem, heading: str, choice: str) -> None:
-        menu.title = f"{heading}: {choice}"
-        _speak_label(menu, f"{heading}, currently {choice}")
-
-    def _personality_chooser(self, mode: personality.Mode) -> Callable[[object], None]:
-        def choose(_sender: object) -> None:
-            self._choose_personality(mode)
-
-        return choose
-
-    def _choose_personality(self, mode: personality.Mode) -> None:
-        personality.set_mode(mode)
-        self._show_personality_choice()
-
-    def _show_personality_choice(self) -> None:
-        current = personality.get_mode()
-        for mode, item in self.personality_items.items():
-            item.state = int(mode is current)
-        self._show_submenu_choice(self.personality_menu, "Style", current.value)
-
-    def choose_brief(self, _sender: object) -> None:
-        self._choose_personality(personality.Mode.BRIEF)
-
-    def choose_friendly(self, _sender: object) -> None:
-        self._choose_personality(personality.Mode.FRIENDLY)
-
     def _voice_chooser(self, choice: str) -> Callable[[object], None]:
         def choose(_sender: object) -> None:
             self.choose_voice(choice)
@@ -1045,61 +943,29 @@ class MurmurApp(rumps.App):
         return choose
 
     def choose_voice(self, choice: str) -> None:
-        """choice is "voiceover", "mac", or a Natural voice like "marin"."""
-        if choice in config.VOICES:
-            settings.set("engine", "natural")
-            settings.set("voice", choice)
-        else:
-            settings.set("engine", choice)
+        """choice is "mac" or "natural"."""
+        settings.set("engine", choice)
         self._show_voice_choice()
-        self._show_speed_choice()
-        print(f"Murmur voice: now {current_voice_name()}.")
+        print(f"Murmur voice: now {VOICE_CHOICES[choice][0]}.")
 
     def _show_voice_choice(self) -> None:
-        current = _current_voice_choice()
+        current = voice.engine()
         for choice, item in self.voice_items.items():
             item.state = int(choice == current)
-        self._show_submenu_choice(self.voice_menu, "Voice", current_voice_name())
+        name = VOICE_CHOICES[current][0]
+        self.voice_menu.title = f"Voice: {name}"
+        _speak_label(self.voice_menu, f"Voice, currently {name}")
 
-    def _speed_chooser(self, choice: str) -> Callable[[object], None]:
-        def choose(_sender: object) -> None:
-            self.choose_speed(choice)
+    def speed_changed(self, position: float) -> None:
+        voice.set_speed(position)
 
-        return choose
+    def speed_settled(self, position: float) -> None:
+        print(f"Murmur speed: {slider_words(position)}.")
+        start_speed_sample()
 
-    def choose_speed(self, choice: str) -> None:
-        settings.set("speed", choice)
-        self._show_speed_choice()
-        print(f"Murmur speed: now {config.SPEEDS[choice]}.")
-
-    def _show_speed_choice(self) -> None:
-        current = voice.speed_choice()
-        for choice, item in self.speed_items.items():
-            item.state = int(choice == current)
-        self._show_submenu_choice(self.speed_menu, "Speed", config.SPEEDS[current])
-        if voice.engine() == "voiceover":
-            # The menu still works, but VoiceOver talks at your own VoiceOver rate.
-            _speak_label(self.speed_menu, f"Speed, currently {config.SPEEDS[current]}. "
-                         "VoiceOver uses its own rate, set in VoiceOver")
-
-    def _tap_chooser(self, choice: str) -> Callable[[object], None]:
-        def choose(_sender: object) -> None:
-            self.choose_double_tap(choice)
-
-        return choose
-
-    def choose_double_tap(self, choice: str) -> None:
-        settings.set("double_tap_key", choice)
-        self._show_tap_choice()
-        print(f"Murmur hotkey: now {hotkey.shortcuts_label()}.")
-
-    def _show_tap_choice(self) -> None:
-        current = hotkey.double_tap_choice()
-        for choice, item in self.tap_items.items():
-            item.state = int(choice == current)
-        self._show_submenu_choice(self.tap_menu, "Double-tap key", config.DOUBLE_TAP_KEYS[current])
-        self.read_item.title = read_last_output_title()
-        _speak_label(self.read_item, _read_last_output_label())
+    def show_speed(self) -> None:
+        if self.speed_slider is not None:
+            self.speed_slider.set_position(voice.speed())
 
     def read_full(self, _sender: object) -> None:
         start_read_full()
@@ -1119,15 +985,74 @@ class MurmurApp(rumps.App):
     def set_api_key(self, _sender: object) -> None:
         ask_for_api_key()
 
-    def test_voice(self, _sender: object) -> None:
-        start_test_voice()
 
-    def replay_welcome(self, _sender: object) -> None:
-        start_welcome()
+_MENU_APP: MurmurApp | None = None
+
+
+def slider_words(position: float) -> str:
+    return f"{round(position * 100)} percent"
+
+
+SPEED_SAMPLE = "This is how fast Murmur talks."
+
+
+def _run_speed_sample_job() -> None:
+    global _JOB_ACTIVE
+    try:
+        if not _JOB_CANCELLED.is_set():
+            voice.speak(SPEED_SAMPLE, mode=personality.Mode.BRIEF)
+    finally:
+        with _JOB_LOCK:
+            _JOB_ACTIVE = False
+
+
+def start_speed_sample() -> bool:
+    """Say a short sample at the new speed. A newer change cuts off the older sample."""
+    return _start_background_job(_run_speed_sample_job, "murmur-speed-sample", stop_if_running=True) or _start_when_free(
+        _run_speed_sample_job, "murmur-speed-sample"
+    )
+
+
+def change_speed(step: int) -> str:
+    """Up or Down arrow in the Murmur key layer: one step faster or slower, said at the new speed."""
+    before = voice.speed()
+    after = voice.set_speed(before + step * config.SPEED_STEP)
+    if after == before:
+        word = "Fastest." if step > 0 else "Slowest."
+    else:
+        word = "Faster." if step > 0 else "Slower."
+    print(f"Murmur speed: {slider_words(after)}.")
+    if _MENU_APP is not None:
+        _on_main(_MENU_APP.show_speed)  # keep the menu's slider in step
+    _say_soon(word)
+    return word
+
+
+def _say_soon(text: str) -> None:
+    def job() -> None:
+        global _JOB_ACTIVE
+        try:
+            voice.speak(text, mode=personality.Mode.BRIEF)
+        finally:
+            with _JOB_LOCK:
+                _JOB_ACTIVE = False
+
+    if not _start_background_job(job, "murmur-speed-word", stop_if_running=True):
+        _start_when_free(job, "murmur-speed-word")
+
+
+def _on_main(work: Callable[[], None]) -> None:
+    try:
+        from PyObjCTools import AppHelper
+
+        AppHelper.callAfter(work)
+    except Exception:
+        pass
 
 
 def main() -> None:
     packaged.prepare()  # inside Murmur.app: log file and tool PATH; does nothing with `uv run`
+    settings.migrate()  # settings saved by an older Murmur: old voices, speeds and styles
     for warning in config.startup_warnings():
         print(warning, file=sys.stderr)
     print(api_key_status())
