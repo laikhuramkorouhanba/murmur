@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <title>Murmur sound bubble</title>
+  <rect width="1024" height="1024" fill="#281a5e"/>
+  <path
+    d="M314 180h396a104 104 0 0 1 104 104v302a104 104 0 0 1-104 104H526L346 840c-14 11-27 0-24-16l50-134h-58a104 104 0 0 1-104-104V284a104 104 0 0 1 104-104Z"
+    fill="#fff9ef"/>
+  <rect x="360" y="350" width="68" height="170" rx="34" fill="#281a5e"/>
+  <rect x="478" y="300" width="68" height="270" rx="34" fill="#00788a"/>
+  <rect x="596" y="375" width="68" height="195" rx="34" fill="#281a5e"/>
+</svg>

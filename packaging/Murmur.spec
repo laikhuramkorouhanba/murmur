@@ -39,6 +39,7 @@ coll = COLLECT(exe, a.binaries, a.datas, name="Murmur")
 app = BUNDLE(
     coll,
     name="Murmur.app",
+    icon=str(ROOT / "assets" / "Murmur.icns"),
     bundle_identifier="com.korouhanba.murmur",
     version=VERSION,
     info_plist={
