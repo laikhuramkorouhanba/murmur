@@ -1,11 +1,11 @@
-Last login: Sat Oct 24 09:15:12 on ttys001
-laikhuram@MacBook-Pro ~ % pwd
-/Users/laikhuram/murmur
-laikhuram@MacBook-Pro murmur % pytest -q demo/failing_check.py
+Last login: Mon Jan 1 00:00:00 on ttys001
+developer@macbook ~ % pwd
+/Users/example/murmur
+developer@macbook murmur % pytest -q demo/failing_check.py
 F                                                                        [100%]
 =================================== FAILURES ===================================
 ______________________ test_total_includes_the_tip ______________________
 E       assert 18.0 == 19.8
 demo/failing_check.py:6: AssertionError
 1 failed in 0.06s
-laikhuram@MacBook-Pro murmur %
+developer@macbook murmur %

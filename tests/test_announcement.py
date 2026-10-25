@@ -75,7 +75,7 @@ def test_long_success_says_how_many_lines(monkeypatch) -> None:
 
 
 def test_announcement_speaks_short_output_exactly(monkeypatch, capsys) -> None:
-    history = "user@MacBook-Pro murmur % pwd\n/Users/laikhuram/murmur\nuser@MacBook-Pro murmur % "
+    history = "user@MacBook-Pro murmur % pwd\n/Users/example/murmur\nuser@MacBook-Pro murmur % "
     spoken = []
     monkeypatch.setattr(app, "get_terminal_text", lambda: history)
     monkeypatch.setattr(
@@ -86,9 +86,9 @@ def test_announcement_speaks_short_output_exactly(monkeypatch, capsys) -> None:
 
     app.announce_last_output()
 
-    assert spoken == ["/Users/laikhuram/murmur"]
+    assert spoken == ["/Users/example/murmur"]
     output = capsys.readouterr().out
-    assert "/Users/laikhuram/murmur\n----- Murmur: spoken text -----" in output
+    assert "/Users/example/murmur\n----- Murmur: spoken text -----" in output
     assert "Voice engine: OpenAI" in output
 
 

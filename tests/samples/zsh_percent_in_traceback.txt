@@ -1,4 +1,4 @@
-laikhuram@MacBook-Pro murmur % uv run pytest -q
+developer@macbook murmur % uv run pytest -q
 F                                                                        [100%]
 =================================== FAILURES ===================================
 _________________________________ test_greet __________________________________
@@ -10,4 +10,4 @@ tests/test_greet.py:4:
 E       TypeError: not enough arguments for format string
 app.py:2: TypeError
 1 failed in 0.05s
-laikhuram@MacBook-Pro murmur %
+developer@macbook murmur %

@@ -12,7 +12,7 @@ def test_keeps_only_the_latest_zsh_command_output() -> None:
     output = last_command_output(history)
 
     assert output.startswith("F                                                                        [100%]")
-    assert "laikhuram@MacBook-Pro ~ % pwd" not in output
+    assert "developer@macbook ~ % pwd" not in output
     assert "demo/failing_check.py:6: AssertionError" in output
 
 

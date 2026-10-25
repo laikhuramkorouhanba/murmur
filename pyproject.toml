@@ -1,11 +1,9 @@
 [project]
 name = "murmur"
 version = "0.1.0"
-description = "Add your description here"
+description = "Accessible spoken summaries for terminal output"
 readme = "README.md"
-authors = [
-    { name = "Korouhanba", email = "laikhuramkorouhanba@gmail.com" }
-]
+authors = [{ name = "Murmur contributors" }]
 requires-python = ">=3.12"
 dependencies = [
     "openai>=3.37.0",
