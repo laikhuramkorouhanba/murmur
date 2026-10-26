@@ -8,6 +8,8 @@ Screen reader users hear terminal output one line at a time: every progress bar,
 
 **Built with:** Python, rumps, OpenAI (gpt-4o-mini-tts, Marin voice), and Codex CLI for Fix it.
 
+Made for the Codex community hackathon at DevDay Exchange Paris.
+
 ## Menu preview
 
 ![Murmur menu items: Read last result, Read everything, Fix last error, Undo last fix, Voice, Speed, Auto-announce, Show captions, Demo, More and Quit.](assets/screenshots/menu.png)
@@ -21,6 +23,15 @@ Demo holds the offline demo replay and a reset for the demo project. More holds 
 ## What it does
 
 Murmur reads the front Terminal tab and strips colour, progress and table clutter. Failures include the exact file, line and cause; short successes are read aloud; long ones get a line count. Full output is one shortcut away. VoiceOver gets sounds only. Mac speech is offline; OpenAI needs a key and internet.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    Terminal[Terminal.app] --> Watcher --> Cleaner --> Announcer --> Voice[Mac or OpenAI voice]
+    Announcer -->|failure and Fix shortcut| Fixer --> Codex[Codex CLI]
+    Fixer --> Snapshots[Git snapshots] --> Undo
+```
 
 ## Quick start
 
